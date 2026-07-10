@@ -32,19 +32,41 @@ Se preferir não mexer no `PATH`, informe o caminho completo do executável em
 Se você recebeu esta pasta de alguém (ou vai repassá-la), não precisa mexer
 em terminal:
 
-1. Dê **duplo clique em `instalar.bat`**. Ele detecta se Python e ffmpeg já
-   estão instalados e, se não estiverem, instala os dois automaticamente
-   via `winget` (recurso nativo do Windows 10/11), além de instalar as
-   bibliotecas Python do projeto.
+1. Dê **duplo clique em `instalar.bat`**. Ele detecta o que já está
+   instalado e instala automaticamente o que faltar via `winget` (recurso
+   nativo do Windows 10/11): Python, ffmpeg, Tesseract OCR e Poppler — além
+   de instalar todas as bibliotecas Python do projeto.
    - Se o Python precisar ser instalado do zero, o script vai pedir para
      você rodar `instalar.bat` **uma segunda vez** depois (o Windows precisa
      atualizar o PATH primeiro).
+   - Se ffmpeg ou Poppler forem instalados nessa execução, **reinicie o
+     computador** (ou pelo menos saia e entre de novo na sua conta) antes
+     de usar o app — o script avisa isso na tela final quando necessário.
+   - DOCX → PDF continua precisando do Microsoft Word ou do
+     [LibreOffice](https://www.libreoffice.org/download) instalado à parte
+     — não é baixado automaticamente por ser um instalador grande.
 2. Depois de terminar, dê **duplo clique em `iniciar.bat`** sempre que quiser
    abrir o programa.
 
-Envie a pasta inteira (todos os arquivos `.py` + `instalar.bat` + `iniciar.bat`
-+ `requirements.txt`) compactada em `.zip` para a outra pessoa — não é
-necessário ter Git nem nenhuma ferramenta extra instalada previamente.
+Envie a pasta inteira (todos os arquivos `.py` + a pasta `documentos/` +
+`instalar.bat` + `iniciar.bat` + `requirements.txt`) compactada em `.zip`
+para a outra pessoa — não é necessário ter Git nem nenhuma ferramenta extra
+instalada previamente.
+
+### "winget indisponível" mesmo com o winget instalado
+
+Se `instalar.bat` mostrar "AVISO: winget indisponível" mas você sabe que o
+winget funciona no seu PC (abra um terminal novo e rode `winget --version`
+para confirmar), a causa provável é o **Explorer do Windows** estar rodando
+há muito tempo com uma cópia desatualizada do `PATH` em memória — qualquer
+`.bat` aberto por duplo clique herda esse `PATH` velho, mesmo que o winget
+já esteja instalado e funcionando em terminais abertos depois disso.
+Soluções, da mais rápida para a mais garantida:
+
+1. Reinicie o Explorer: Gerenciador de Tarefas → aba Processos → "Explorador
+   de Arquivos" → Reiniciar.
+2. Ou simplesmente reinicie o computador.
+3. Depois, rode `instalar.bat` de novo.
 
 ## Instalação manual (via terminal)
 
@@ -181,6 +203,9 @@ Saída padrão: `~/Documents/Convertidos`.
 
 ### Dependências extras desta aba
 
+O `instalar.bat` já instala Tesseract e Poppler automaticamente (veja
+[Instalação rápida](#instalação-rápida-recomendado-para-enviar-a-outra-pessoa)
+acima). As instruções abaixo são só para quem prefere instalar manualmente.
 Além do `ffmpeg` já usado pelo resto do app, a aba Documentos precisa de:
 
 - **Tesseract OCR** (motor de reconhecimento de texto):

@@ -105,6 +105,18 @@ def find_ffmpeg(custom_path: str = "") -> str:
     if found:
         return found
 
+    if os.name == "nt":
+        # winget installs ffmpeg as a "portable" package and exposes it via
+        # a shim in this fixed folder. Checking it directly means the app
+        # can find ffmpeg right after `instalar.bat` runs, even before the
+        # user has restarted the PC and the PATH change has fully
+        # propagated to every already-running process.
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        if local_app_data:
+            winget_shim = os.path.join(local_app_data, "Microsoft", "WinGet", "Links", "ffmpeg.exe")
+            if os.path.isfile(winget_shim):
+                return winget_shim
+
     return ""
 
 

@@ -16,6 +16,8 @@ APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "config.json"
 
 DEFAULT_OUTPUT_DIR = str(Path.home() / "Videos" / "Downloads")
+DEFAULT_OCR_OUTPUT_DIR = str(Path.home() / "Documents" / "Digitalizados")
+DEFAULT_DOC_CONVERT_OUTPUT_DIR = str(Path.home() / "Documents" / "Convertidos")
 
 QUALITY_CHOICES = [
     "4K (2160p)",
@@ -38,6 +40,8 @@ class Settings:
     save_metadata: bool = False
     ffmpeg_path: str = ""
     theme: str = "dark"  # "dark" or "light"
+    ocr_output_dir: str = DEFAULT_OCR_OUTPUT_DIR
+    doc_convert_output_dir: str = DEFAULT_DOC_CONVERT_OUTPUT_DIR
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -75,6 +79,19 @@ def load_settings() -> Settings:
     except OSError:
         settings.output_dir = DEFAULT_OUTPUT_DIR
         os.makedirs(settings.output_dir, exist_ok=True)
+
+    # Same for the Documentos tab's OCR / conversion output folders.
+    try:
+        os.makedirs(settings.ocr_output_dir, exist_ok=True)
+    except OSError:
+        settings.ocr_output_dir = DEFAULT_OCR_OUTPUT_DIR
+        os.makedirs(settings.ocr_output_dir, exist_ok=True)
+
+    try:
+        os.makedirs(settings.doc_convert_output_dir, exist_ok=True)
+    except OSError:
+        settings.doc_convert_output_dir = DEFAULT_DOC_CONVERT_OUTPUT_DIR
+        os.makedirs(settings.doc_convert_output_dir, exist_ok=True)
 
     return settings
 

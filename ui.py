@@ -23,10 +23,14 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QComboBox, QListWidget,
     QListWidgetItem, QProgressBar, QFileDialog, QDialog, QSpinBox, QCheckBox,
-    QMessageBox, QFrame, QSizePolicy, QScrollArea,
+    QMessageBox, QFrame, QSizePolicy, QScrollArea, QTabWidget,
 )
 
 from downloader import DownloadItem, DownloadManager, AUDIO_ONLY_LABEL
+from converter import (
+    ConversionItem, ConversionManager, CATEGORY_LABELS, available_targets,
+)
+from documentos.tab_documentos import DocumentosTab
 from settings import Settings, QUALITY_CHOICES, save_settings
 from utils import is_valid_url, split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working
 
@@ -81,14 +85,14 @@ def build_stylesheet(theme: str) -> str:
         border-radius: 8px;
         border: 1px solid {c['accent']};
     }}
-    QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {{
+    QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {{
         background-color: {c['surface']};
         border: 1px solid {c['accent']};
         border-radius: 6px;
         padding: 6px;
         color: {c['text']};
     }}
-    QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
+    QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus {{
         border: 1px solid {c['highlight']};
     }}
     QPushButton {{
@@ -154,10 +158,39 @@ def build_stylesheet(theme: str) -> str:
     QScrollArea {{
         border: none;
     }}
+    QTabWidget::pane {{
+        border: none;
+        background-color: {c['bg']};
+    }}
+    QTabBar::tab {{
+        background-color: {c['surface']};
+        color: {c['text_dim']};
+        padding: 8px 18px;
+        margin-right: 2px;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
+    }}
+    QTabBar::tab:selected {{
+        background-color: {c['accent']};
+        color: {c['text']};
+        border-bottom: 2px solid {c['highlight']};
+    }}
+    QTabBar::tab:hover {{
+        color: {c['text']};
+    }}
+    QFrame#DropZone {{
+        background-color: {c['surface']};
+        border: 2px dashed {c['accent']};
+        border-radius: 8px;
+    }}
+    QFrame#DropZone:hover {{
+        border: 2px dashed {c['highlight']};
+    }}
     """
 
 
 THUMB_SIZE = QSize(96, 54)
+CATEGORY_ICONS = {"video": "🎞", "audio": "🎵", "image": "🖼"}
 
 
 class QueueItemWidget(QFrame):
@@ -288,6 +321,174 @@ class QueueItemWidget(QFrame):
         if item.status in (DownloadItem.STATUS_ERROR, DownloadItem.STATUS_UNAVAILABLE):
             self.manager.retry_item(self.item_id)
         elif item.status in (DownloadItem.STATUS_DONE, DownloadItem.STATUS_CANCELLED):
+            self.manager.items.pop(self.item_id, None)
+            if self.item_id in self.manager.order:
+                self.manager.order.remove(self.item_id)
+            self.manager.item_removed.emit(self.item_id)
+        else:
+            self.manager.cancel_item(self.item_id)
+
+
+class DropZone(QFrame):
+    """A drag-and-drop target for the converter tab. Accepts one or more
+    local files dropped from Windows Explorer and forwards their paths."""
+
+    def __init__(self, on_files_dropped, parent=None):
+        super().__init__(parent)
+        self._on_files_dropped = on_files_dropped
+        self.setObjectName("DropZone")
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(46)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        label = QLabel("📥 Arraste arquivos aqui, ou clique em \"Selecionar arquivo(s)\"")
+        label.setObjectName("Dim")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if paths:
+            self._on_files_dropped(paths)
+
+
+class ConversionItemWidget(QFrame):
+    """One row inside the file-conversion queue list."""
+
+    def __init__(self, item_id: int, manager: ConversionManager, parent=None):
+        super().__init__(parent)
+        self.item_id = item_id
+        self.manager = manager
+        self.setObjectName("Card")
+
+        item = manager.get_item(item_id)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        icon_label = QLabel(CATEGORY_ICONS.get(item.category, "📄"))
+        icon_label.setFixedSize(THUMB_SIZE)
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setStyleSheet(
+            "background-color: rgba(255,255,255,15); border-radius: 4px; font-size: 22pt;"
+        )
+        top_row.addWidget(icon_label)
+
+        text_col = QVBoxLayout()
+        self.title_label = QLabel(item.filename)
+        self.title_label.setStyleSheet("font-weight: 600;")
+        self.title_label.setWordWrap(True)
+        text_col.addWidget(self.title_label)
+        self.meta_label = QLabel("")
+        self.meta_label.setObjectName("Dim")
+        text_col.addWidget(self.meta_label)
+        top_row.addLayout(text_col, stretch=1)
+
+        self.format_combo = QComboBox()
+        self.format_combo.setFixedWidth(110)
+        if item.category:
+            self.format_combo.addItems([f.upper() for f in available_targets(item.category, item.source_ext)])
+            idx = self.format_combo.findText(item.target_ext.upper())
+            if idx >= 0:
+                self.format_combo.setCurrentIndex(idx)
+        else:
+            self.format_combo.addItem("--")
+            self.format_combo.setEnabled(False)
+        self.format_combo.currentTextChanged.connect(self._on_format_changed)
+        top_row.addWidget(self.format_combo)
+
+        self.action_btn = QPushButton("✕ Cancelar")
+        self.action_btn.setObjectName("Danger")
+        self.action_btn.setFixedWidth(140)
+        self.action_btn.clicked.connect(self._on_action_clicked)
+        top_row.addWidget(self.action_btn, alignment=Qt.AlignTop)
+
+        outer.addLayout(top_row)
+
+        bottom_row = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(10)
+        bottom_row.addWidget(self.progress_bar, stretch=1)
+
+        self.status_label = QLabel(item.status)
+        self.status_label.setFixedWidth(260)
+        bottom_row.addWidget(self.status_label)
+
+        outer.addLayout(bottom_row)
+
+        self.refresh(item)
+
+    def _on_format_changed(self, text):
+        if not text or text == "--":
+            return
+        self.manager.set_target_format(self.item_id, text.lower())
+
+    def refresh(self, item: ConversionItem):
+        icon = CATEGORY_ICONS.get(item.category, "📄")
+        category_label = CATEGORY_LABELS.get(item.category, "")
+        if item.category:
+            self.meta_label.setText(f"{icon} {category_label}   ·   .{item.source_ext} → .{item.target_ext}")
+        else:
+            self.meta_label.setText(f"{icon} .{item.source_ext}")
+
+        self.progress_bar.setValue(int(item.progress))
+        self.format_combo.setEnabled(item.status == ConversionItem.STATUS_WAITING and item.category is not None)
+
+        status = item.status
+        if status == ConversionItem.STATUS_CONVERTING:
+            self.status_label.setText(f"{status}  {int(item.progress)}%")
+            self.status_label.setObjectName("")
+            self.action_btn.setText("✕ Cancelar")
+            self.action_btn.setEnabled(True)
+            self.progress_bar.setVisible(True)
+        elif status == ConversionItem.STATUS_DONE:
+            self.status_label.setText(status)
+            self.status_label.setObjectName("StatusDone")
+            self.action_btn.setText("🗑 Remover")
+            self.action_btn.setEnabled(True)
+            self.progress_bar.setVisible(False)
+        elif status in (ConversionItem.STATUS_ERROR, ConversionItem.STATUS_UNSUPPORTED):
+            text = status
+            if item.error_message:
+                text += f" — {item.error_message[:80]}"
+            self.status_label.setText(text)
+            self.status_label.setObjectName("StatusError")
+            self.action_btn.setText(
+                "↻ Tentar novamente" if status == ConversionItem.STATUS_ERROR else "🗑 Remover"
+            )
+            self.action_btn.setEnabled(True)
+            self.progress_bar.setVisible(False)
+        elif status == ConversionItem.STATUS_CANCELLED:
+            self.status_label.setText(status)
+            self.action_btn.setText("🗑 Remover")
+            self.action_btn.setEnabled(True)
+            self.progress_bar.setVisible(False)
+        else:  # WAITING
+            self.status_label.setText(status)
+            self.action_btn.setText("✕ Cancelar")
+            self.action_btn.setEnabled(True)
+            self.progress_bar.setVisible(False)
+
+        self.style().unpolish(self.status_label)
+        self.style().polish(self.status_label)
+
+    def _on_action_clicked(self):
+        item = self.manager.get_item(self.item_id)
+        if item is None:
+            return
+        if item.status == ConversionItem.STATUS_ERROR:
+            self.manager.retry_item(self.item_id)
+        elif item.status in (ConversionItem.STATUS_DONE, ConversionItem.STATUS_CANCELLED,
+                              ConversionItem.STATUS_UNSUPPORTED):
             self.manager.items.pop(self.item_id, None)
             if self.item_id in self.manager.order:
                 self.manager.order.remove(self.item_id)
@@ -439,12 +640,15 @@ class UrlInput(QPlainTextEdit):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, manager: DownloadManager, settings: Settings):
+    def __init__(self, manager: DownloadManager, conversion_manager: ConversionManager, settings: Settings):
         super().__init__()
         self.manager = manager
+        self.conversion_manager = conversion_manager
         self.settings = settings
         self._widgets: dict[int, QueueItemWidget] = {}
         self._list_items: dict[int, QListWidgetItem] = {}
+        self._conv_widgets: dict[int, ConversionItemWidget] = {}
+        self._conv_list_items: dict[int, QListWidgetItem] = {}
         self._ffmpeg_warned = False
 
         self.setWindowTitle("🎬 Video Downloader")
@@ -485,10 +689,17 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(about_btn)
         root.addWidget(top_bar)
 
-        body = QVBoxLayout()
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_downloads_tab(), "⬇ Downloads")
+        self.tabs.addTab(self._build_converter_tab(), "🔄 Converter Arquivos")
+        self.tabs.addTab(DocumentosTab(self.settings), "📄 Documentos")
+        root.addWidget(self.tabs, stretch=1)
+
+    def _build_downloads_tab(self) -> QWidget:
+        tab = QWidget()
+        body = QVBoxLayout(tab)
         body.setContentsMargins(16, 12, 16, 12)
         body.setSpacing(10)
-        root.addLayout(body)
 
         # --- URL input row -------------------------------------------------
         input_row = QHBoxLayout()
@@ -556,6 +767,73 @@ class MainWindow(QMainWindow):
         bottom_row.addWidget(self.status_bar_label)
 
         body.addLayout(bottom_row)
+        return tab
+
+    def _build_converter_tab(self) -> QWidget:
+        tab = QWidget()
+        body = QVBoxLayout(tab)
+        body.setContentsMargins(16, 12, 16, 12)
+        body.setSpacing(10)
+
+        # --- file picker / drop zone row ------------------------------------
+        input_row = QHBoxLayout()
+        select_btn = QPushButton("🗂 Selecionar arquivo(s)")
+        select_btn.setObjectName("Primary")
+        select_btn.clicked.connect(self.on_select_conversion_files)
+        input_row.addWidget(select_btn)
+        self.drop_zone = DropZone(self.on_files_dropped)
+        input_row.addWidget(self.drop_zone, stretch=1)
+        body.addLayout(input_row)
+
+        self.conv_error_label = QLabel("")
+        self.conv_error_label.setObjectName("ErrorLabel")
+        self.conv_error_label.setVisible(False)
+        body.addWidget(self.conv_error_label)
+
+        # --- folder row ------------------------------------------------------
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel("Pasta de destino:"))
+        self.conv_folder_label = QLabel(self.settings.output_dir)
+        self.conv_folder_label.setObjectName("Dim")
+        folder_row.addWidget(self.conv_folder_label, stretch=1)
+        conv_folder_btn = QPushButton("📁 Escolher")
+        conv_folder_btn.clicked.connect(self.choose_output_folder)
+        folder_row.addWidget(conv_folder_btn)
+        body.addLayout(folder_row)
+
+        # --- queue section -----------------------------------------------------
+        queue_label = QLabel("ARQUIVOS PARA CONVERTER")
+        queue_label.setObjectName("Dim")
+        body.addWidget(queue_label)
+
+        self.conv_queue_list = QListWidget()
+        self.conv_queue_list.setSpacing(6)
+        self.conv_queue_list.setSelectionMode(QListWidget.NoSelection)
+        self.conv_queue_list.setFocusPolicy(Qt.NoFocus)
+        body.addWidget(self.conv_queue_list, stretch=1)
+
+        # --- bottom controls -----------------------------------------------------
+        bottom_row = QHBoxLayout()
+        self.conv_start_btn = QPushButton("▶ Converter tudo")
+        self.conv_start_btn.setObjectName("Primary")
+        self.conv_start_btn.clicked.connect(self.on_start_all_conversions)
+        bottom_row.addWidget(self.conv_start_btn)
+
+        self.conv_pause_btn = QPushButton("⏸ Pausar")
+        self.conv_pause_btn.clicked.connect(self.on_pause_conversions)
+        bottom_row.addWidget(self.conv_pause_btn)
+
+        conv_clear_btn = QPushButton("🗑 Limpar concluídos")
+        conv_clear_btn.clicked.connect(self.conversion_manager.clear_completed)
+        bottom_row.addWidget(conv_clear_btn)
+
+        bottom_row.addStretch(1)
+        self.conv_status_label = QLabel("")
+        self.conv_status_label.setObjectName("Dim")
+        bottom_row.addWidget(self.conv_status_label)
+
+        body.addLayout(bottom_row)
+        return tab
 
     def _connect_manager_signals(self):
         self.manager.item_added.connect(self._on_item_added)
@@ -563,6 +841,12 @@ class MainWindow(QMainWindow):
         self.manager.item_removed.connect(self._on_item_removed)
         self.manager.queue_idle.connect(self._on_queue_idle)
         self.manager.ffmpeg_missing.connect(self._on_ffmpeg_missing)
+
+        self.conversion_manager.item_added.connect(self._on_conv_item_added)
+        self.conversion_manager.item_updated.connect(self._on_conv_item_updated)
+        self.conversion_manager.item_removed.connect(self._on_conv_item_removed)
+        self.conversion_manager.queue_idle.connect(self._on_conv_queue_idle)
+        self.conversion_manager.ffmpeg_missing.connect(self._on_ffmpeg_missing)
 
     # ------------------------------------------------------------------
     # URL input handling
@@ -627,6 +911,72 @@ class MainWindow(QMainWindow):
     def _on_queue_idle(self):
         self.status_bar_label.setText("Fila concluída.")
 
+    # ------------------------------------------------------------------
+    # Converter tab handling
+    # ------------------------------------------------------------------
+
+    def on_select_conversion_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Selecionar arquivo(s) para converter")
+        if paths:
+            self.on_files_dropped(paths)
+
+    def on_files_dropped(self, paths):
+        self.conv_error_label.setVisible(False)
+        added = 0
+        for path in paths:
+            if os.path.isfile(path):
+                self.conversion_manager.add_file(path)
+                added += 1
+        if added == 0:
+            self.conv_error_label.setText("Nenhum arquivo válido foi selecionado.")
+            self.conv_error_label.setVisible(True)
+
+    def on_start_all_conversions(self):
+        self.conversion_manager.start_all()
+        self.conv_status_label.setText("Convertendo...")
+
+    def on_pause_conversions(self):
+        if self.conversion_manager.paused:
+            self.conversion_manager.paused = False
+            self.conv_pause_btn.setText("⏸ Pausar")
+            self.conv_status_label.setText("Convertendo...")
+        else:
+            self.conversion_manager.pause()
+            self.conv_pause_btn.setText("▶ Retomar")
+            self.conv_status_label.setText("Pausado (conversões em andamento serão concluídas).")
+
+    def _on_conv_item_added(self, item_id: int):
+        item = self.conversion_manager.get_item(item_id)
+        if item is None:
+            return
+        widget = ConversionItemWidget(item_id, self.conversion_manager)
+
+        list_item = QListWidgetItem()
+        list_item.setSizeHint(QSize(0, 100))
+        self.conv_queue_list.addItem(list_item)
+        self.conv_queue_list.setItemWidget(list_item, widget)
+
+        self._conv_widgets[item_id] = widget
+        self._conv_list_items[item_id] = list_item
+
+    def _on_conv_item_updated(self, item_id: int):
+        item = self.conversion_manager.get_item(item_id)
+        widget = self._conv_widgets.get(item_id)
+        if item is None or widget is None:
+            return
+        widget.refresh(item)
+
+    def _on_conv_item_removed(self, item_id: int):
+        list_item = self._conv_list_items.pop(item_id, None)
+        self._conv_widgets.pop(item_id, None)
+        if list_item is not None:
+            row = self.conv_queue_list.row(list_item)
+            if row >= 0:
+                self.conv_queue_list.takeItem(row)
+
+    def _on_conv_queue_idle(self):
+        self.conv_status_label.setText("Conversões concluídas.")
+
     def _on_ffmpeg_missing(self):
         if self._ffmpeg_warned:
             return
@@ -651,6 +1001,7 @@ class MainWindow(QMainWindow):
         if folder:
             self.settings.output_dir = folder
             self.folder_label.setText(folder)
+            self.conv_folder_label.setText(folder)
             save_settings(self.settings)
 
     def on_start_all(self):
@@ -674,6 +1025,7 @@ class MainWindow(QMainWindow):
             dialog.apply_to(self.settings)
             save_settings(self.settings)
             self.folder_label.setText(self.settings.output_dir)
+            self.conv_folder_label.setText(self.settings.output_dir)
             if self.settings.theme != old_theme:
                 self.apply_theme(self.settings.theme)
 
@@ -685,7 +1037,10 @@ class MainWindow(QMainWindow):
             "Baixe vídeos do YouTube, Instagram, Twitter/X, TikTok e mais, "
             "usando yt-dlp.\n\n"
             "Cole um link, escolha a qualidade e clique em Adicionar. "
-            "Depois, clique em 'Iniciar tudo' para começar a fila.",
+            "Depois, clique em 'Iniciar tudo' para começar a fila.\n\n"
+            "Na aba 'Converter Arquivos', envie um arquivo de vídeo, áudio "
+            "ou imagem já salvo no seu PC e escolha para qual formato "
+            "convertê-lo.",
         )
 
     def _check_ffmpeg_on_start(self):
@@ -700,4 +1055,5 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.manager.shutdown()
+        self.conversion_manager.shutdown()
         super().closeEvent(event)

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from settings import load_settings
 from downloader import DownloadManager
+from converter import ConversionManager
 from ui import MainWindow
 
 
@@ -30,7 +31,8 @@ def main():
     try:
         settings = load_settings()
         manager = DownloadManager(settings)
-        window = MainWindow(manager, settings)
+        conversion_manager = ConversionManager(settings)
+        window = MainWindow(manager, conversion_manager, settings)
         window.show()
     except Exception:
         # Anything going wrong during startup still gets a visible dialog

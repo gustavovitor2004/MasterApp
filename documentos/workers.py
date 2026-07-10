@@ -54,49 +54,74 @@ class OcrWorker(QThread):
 
 
 class ConversionWorker(QThread):
-    file_started = Signal(int)               # index into the job list
-    file_finished = Signal(int, bool, str)    # index, success, message (output path or error)
+    """Batch document conversion. Jobs are identified by a stable integer
+    id (not list position) so the UI can delete queued-but-not-yet-reached
+    items mid-run without any index-shifting bugs - deleted ids just get
+    added to `skip_ids` (a set shared by reference with the UI) and this
+    worker skips them when it gets to them."""
+
+    file_started = Signal(int)                # job_id (individual mode only)
+    file_finished = Signal(int, bool, str)     # job_id, success, message (individual mode only)
+    file_skipped = Signal(int, str)            # [NOVO] job_id, reason - "Não suportado" (individual mode only)
+    merge_finished = Signal(bool, str)         # [NOVO] success, output_path or error message (merge mode only)
     all_finished = Signal()
 
-    def __init__(self, jobs, output_dir: str, merge_images: bool = False, parent=None):
-        """`jobs` is a list of source file paths, all converted to the same
-        target format (set via set_target_ext). `merge_images=True` merges
-        every job into a single output PDF instead of converting them
-        individually - only meaningful when every job is an image and the
-        target format is PDF."""
+    def __init__(self, jobs, output_dir: str, target_ext: str, merge: bool = False,
+                 skip_ids=None, output_name: str = None, parent=None):
+        """`jobs` is a list of (job_id, path) tuples, in display order.
+        `merge=True` converts every job to PDF and merges them into a
+        single output file named `output_name` instead of converting them
+        individually."""
         super().__init__(parent)
         self.jobs = jobs
-        self.target_ext = None
         self.output_dir = output_dir
-        self.merge_images = merge_images
-        self._cancelled = False
-
-    def set_target_ext(self, target_ext: str):
         self.target_ext = target_ext
-
-    def cancel(self):
-        self._cancelled = True
+        self.merge = merge
+        self.skip_ids = skip_ids if skip_ids is not None else set()
+        self.output_name = output_name
 
     def run(self):
-        if self.merge_images:
-            self.file_started.emit(0)
-            try:
-                out_paths = doc_converter.merge_images_to_pdf(self.jobs, self.output_dir)
-                message = out_paths[0] if out_paths else self.output_dir
-                self.file_finished.emit(0, True, message)
-            except Exception as exc:  # noqa: BLE001
-                self.file_finished.emit(0, False, str(exc))
-            self.all_finished.emit()
-            return
+        if self.merge:
+            self._run_merge()
+        else:
+            self._run_individual()
 
-        for index, source_path in enumerate(self.jobs):
-            if self._cancelled:
-                break
-            self.file_started.emit(index)
+    def _run_individual(self):
+        for job_id, path in self.jobs:
+            if job_id in self.skip_ids:
+                # [NOVO] item removido da lista pelo usuário enquanto a
+                # conversão estava rodando - pula sem erro, sem sinal (o
+                # widget correspondente já foi removido da UI).
+                continue
+
+            ext, _ = doc_converter.detect_format(path)
+            # [CORRIGIDO] antes o dropdown já bloqueava combinações
+            # inválidas para a lista inteira; agora ele mostra qualquer
+            # formato válido para PELO MENOS UM arquivo, então cada arquivo
+            # individual precisa ser checado aqui - os que não suportam o
+            # destino escolhido são marcados "Não suportado" e pulados, sem
+            # contar como erro.
+            if not doc_converter.can_convert(ext, self.target_ext):
+                self.file_skipped.emit(job_id, "Não suportado")
+                continue
+
+            self.file_started.emit(job_id)
             try:
-                out_paths = doc_converter.convert_file(source_path, self.target_ext, self.output_dir)
+                out_paths = doc_converter.convert_file(path, self.target_ext, self.output_dir)
                 message = out_paths[0] if len(out_paths) == 1 else f"{len(out_paths)} arquivos gerados"
-                self.file_finished.emit(index, True, message)
+                self.file_finished.emit(job_id, True, message)
             except Exception as exc:  # noqa: BLE001 - surface everything to the UI, never crash silently
-                self.file_finished.emit(index, False, str(exc))
+                self.file_finished.emit(job_id, False, str(exc))
+        self.all_finished.emit()
+
+    def _run_merge(self):
+        # [NOVO] modo de mesclagem: converte tudo em PDF e junta em um
+        # único arquivo, na ordem recebida (que reflete a ordem da lista,
+        # incluindo qualquer reordenação feita por arrastar-e-soltar).
+        remaining_paths = [path for job_id, path in self.jobs if job_id not in self.skip_ids]
+        try:
+            out_path = doc_converter.merge_to_pdf(remaining_paths, self.output_dir, self.output_name)
+            self.merge_finished.emit(True, out_path)
+        except Exception as exc:  # noqa: BLE001 - surface everything to the UI, never crash silently
+            self.merge_finished.emit(False, str(exc))
         self.all_finished.emit()

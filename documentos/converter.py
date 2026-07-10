@@ -2,17 +2,18 @@
 documentos/converter.py
 
 All format-conversion logic for the "Converter Formato" sub-tab: images,
-PDFs and DOCX files converted locally, no internet connection required.
-This is a separate, document-focused converter from the top-level
-converter.py (which handles video/audio/image conversion via ffmpeg for
-the Downloads workflow) - they don't share code on purpose, matching how
-downloader.py and the top-level converter.py already keep their own small
-private helpers instead of sharing a base class.
+PDFs, DOCX and TXT files converted locally, no internet connection
+required. This is a separate, document-focused converter from the
+top-level converter.py (which handles video/audio/image conversion via
+ffmpeg for the Downloads workflow) - they don't share code on purpose,
+matching how downloader.py and the top-level converter.py already keep
+their own small private helpers instead of sharing a base class.
 """
 
 import os
 import shutil
 import subprocess
+import tempfile
 
 from PIL import Image
 from reportlab.lib.pagesizes import A4
@@ -24,10 +25,27 @@ from utils import safe_filename
 
 IMAGE_EXTS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
 
+# [CORRIGIDO] tabela de conversão explícita, igual à matriz pedida - cada
+# formato lista só os destinos que de fato tem uma implementação abaixo.
+# Não inclui o próprio formato de origem (ex: "pdf" não lista "pdf"): a
+# opção de manter o mesmo formato é tratada à parte, como passthrough/cópia,
+# em vez de aparecer como "conversão" normal.
+CONVERSION_MATRIX = {
+    "jpg": ["pdf", "png", "bmp", "webp", "tiff"],
+    "jpeg": ["pdf", "png", "bmp", "webp", "tiff"],
+    "png": ["pdf", "jpg", "bmp", "webp", "tiff"],
+    "bmp": ["pdf", "jpg", "png", "webp", "tiff"],
+    "webp": ["pdf", "jpg", "png", "bmp", "tiff"],
+    "tiff": ["pdf", "jpg", "png", "bmp", "webp"],
+    "pdf": ["jpg", "png", "txt", "docx"],
+    "docx": ["pdf", "txt"],
+    "txt": ["pdf", "docx"],
+}
+
 
 def detect_format(file_path: str):
     """Return (extension, category). category is one of "image", "pdf",
-    "docx", or None if unsupported."""
+    "docx", "txt", or None if unsupported."""
     ext = os.path.splitext(file_path)[1].lower().lstrip(".")
     if ext in IMAGE_EXTS:
         return ext, "image"
@@ -35,18 +53,23 @@ def detect_format(file_path: str):
         return ext, "pdf"
     if ext == "docx":
         return ext, "docx"
+    if ext == "txt":
+        return ext, "txt"
     return ext, None
 
 
 def available_targets(source_ext: str):
-    ext = source_ext.lower()
-    if ext == "pdf":
-        return ["jpg", "png", "docx", "txt"]
-    if ext == "docx":
-        return ["pdf"]
-    if ext in IMAGE_EXTS:
-        return ["pdf"] + [e for e in IMAGE_EXTS if e != ext]
-    return []
+    return list(CONVERSION_MATRIX.get(source_ext.lower(), []))
+
+
+def can_convert(source_ext: str, target_ext: str) -> bool:
+    """Whether a specific file can reach a specific target format - either
+    via a real conversion, or via the same-format passthrough copy."""
+    source_ext = source_ext.lower()
+    target_ext = target_ext.lower()
+    if source_ext == target_ext:
+        return True
+    return target_ext in available_targets(source_ext)
 
 
 def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb=None):
@@ -55,6 +78,13 @@ def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb
     ext = os.path.splitext(source_path)[1].lower().lstrip(".")
     target_ext = target_ext.lower()
     os.makedirs(output_dir, exist_ok=True)
+
+    # [CORRIGIDO] passthrough para mesmo formato: antes não existia nenhum
+    # branch para "origem == destino" (ex: um PDF que já está na lista e o
+    # destino escolhido também é PDF), então convert_file() estourava
+    # ValueError. Agora isso é tratado como uma cópia simples.
+    if ext == target_ext:
+        return [_copy_passthrough(source_path, output_dir)]
 
     if ext in IMAGE_EXTS and target_ext == "pdf":
         return [_image_to_pdf(source_path, output_dir)]
@@ -68,33 +98,69 @@ def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb
         return [_pdf_to_txt(source_path, output_dir, progress_cb)]
     if ext == "docx" and target_ext == "pdf":
         return [_docx_to_pdf(source_path, output_dir)]
+    if ext == "docx" and target_ext == "txt":
+        # [NOVO] DOCX -> TXT
+        return [_docx_to_txt(source_path, output_dir)]
+    if ext == "txt" and target_ext == "pdf":
+        # [NOVO] TXT -> PDF
+        return [_txt_to_pdf(source_path, output_dir)]
+    if ext == "txt" and target_ext == "docx":
+        # [NOVO] TXT -> DOCX
+        return [_txt_to_docx(source_path, output_dir)]
 
     raise ValueError(f"Conversão de .{ext} para .{target_ext} não é suportada.")
 
 
-def merge_images_to_pdf(paths, output_dir: str):
-    """Merge several images into a single multi-page PDF, one image per
-    page. Returns a list with the single output path."""
-    if not paths:
-        return []
-    os.makedirs(output_dir, exist_ok=True)
-    out_path = _unique_path(output_dir, "imagens_mescladas", "pdf")
-    page_w, page_h = A4
+# [NOVO] merge de PDFs - substitui o antigo merge_images_to_pdf (que só
+# aceitava imagens). Agora aceita QUALQUER mistura de formatos suportados:
+# cada arquivo não-PDF é primeiro convertido para um PDF individual em uma
+# pasta temporária (apagada ao final), e todos os PDFs (originais + gerados)
+# são unidos, na ordem recebida, com pypdf.
+def merge_to_pdf(paths, output_dir: str, output_name: str = None) -> str:
+    """Merge several files (images, PDFs, DOCX, TXT - any mix) into a
+    single PDF, one source file's pages appended after another, in the
+    given order. Returns the output path."""
+    from pypdf import PdfWriter
 
-    c = canvas.Canvas(out_path, pagesize=A4)
-    for path in paths:
-        image = Image.open(path)
-        image = image.convert("RGB")
-        draw_w, draw_h, x, y = _fit_to_page(image.size, (page_w, page_h))
-        c.drawImage(ImageReader(image), x, y, width=draw_w, height=draw_h)
-        c.showPage()
-    c.save()
-    return [out_path]
+    if not paths:
+        raise ValueError("Nenhum arquivo para mesclar.")
+
+    os.makedirs(output_dir, exist_ok=True)
+    writer = PdfWriter()
+    temp_dir = tempfile.mkdtemp(prefix="docmerge_")
+    try:
+        for path in paths:
+            ext = os.path.splitext(path)[1].lower().lstrip(".")
+            if ext == "pdf":
+                pdf_path = path
+            else:
+                pdf_path = convert_file(path, "pdf", temp_dir)[0]
+            writer.append(pdf_path)
+
+        base_name = safe_filename(os.path.splitext(output_name)[0]) if output_name else "documento_mesclado"
+        out_path = _unique_path(output_dir, base_name, "pdf")
+        with open(out_path, "wb") as f:
+            writer.write(f)
+    finally:
+        writer.close()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return out_path
 
 
 # ---------------------------------------------------------------------------
 # Individual conversions
 # ---------------------------------------------------------------------------
+
+def _copy_passthrough(path: str, output_dir: str) -> str:
+    """Same-format "conversion": just copy the file to the output folder
+    under a non-colliding name."""
+    base = safe_filename(os.path.splitext(os.path.basename(path))[0])
+    ext = os.path.splitext(path)[1].lstrip(".")
+    out_path = _unique_path(output_dir, base, ext)
+    shutil.copy2(path, out_path)
+    return out_path
+
 
 def _image_to_pdf(path: str, output_dir: str) -> str:
     image = Image.open(path).convert("RGB")
@@ -202,6 +268,40 @@ def _docx_to_pdf(path: str, output_dir: str) -> str:
         "Não foi possível converter DOCX para PDF: é necessário ter o Microsoft "
         "Word instalado (Windows) ou o LibreOffice instalado no sistema."
     )
+
+
+def _docx_to_txt(path: str, output_dir: str) -> str:
+    # [NOVO]
+    from docx import Document
+
+    base = safe_filename(os.path.splitext(os.path.basename(path))[0])
+    out_path = _unique_path(output_dir, base, "txt")
+    document = Document(path)
+    text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return out_path
+
+
+def _txt_to_pdf(path: str, output_dir: str) -> str:
+    # [NOVO] reaproveita o exportador de texto->PDF já usado pelo OCR
+    # (produz um PDF com texto real/pesquisável, não uma imagem).
+    from documentos.ocr_engine import save_as_pdf
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    base = safe_filename(os.path.splitext(os.path.basename(path))[0])
+    return save_as_pdf(text, output_dir, base)
+
+
+def _txt_to_docx(path: str, output_dir: str) -> str:
+    # [NOVO]
+    from documentos.ocr_engine import save_as_docx
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    base = safe_filename(os.path.splitext(os.path.basename(path))[0])
+    return save_as_docx(text, output_dir, base)
 
 
 # ---------------------------------------------------------------------------

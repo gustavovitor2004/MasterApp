@@ -67,11 +67,12 @@ class ConversionWorker(QThread):
     all_finished = Signal()
 
     def __init__(self, jobs, output_dir: str, target_ext: str, merge: bool = False,
-                 skip_ids=None, output_name: str = None, parent=None):
+                 skip_ids=None, output_name: str = None, passwords: dict = None, parent=None):
         """`jobs` is a list of (job_id, path) tuples, in display order.
         `merge=True` converts every job to PDF and merges them into a
         single output file named `output_name` instead of converting them
-        individually."""
+        individually. `passwords` is an optional {path: password} map -
+        [NOVO] used to open password-protected PDFs during merge."""
         super().__init__(parent)
         self.jobs = jobs
         self.output_dir = output_dir
@@ -79,6 +80,7 @@ class ConversionWorker(QThread):
         self.merge = merge
         self.skip_ids = skip_ids if skip_ids is not None else set()
         self.output_name = output_name
+        self.passwords = passwords or {}
 
     def run(self):
         if self.merge:
@@ -120,7 +122,9 @@ class ConversionWorker(QThread):
         # incluindo qualquer reordenação feita por arrastar-e-soltar).
         remaining_paths = [path for job_id, path in self.jobs if job_id not in self.skip_ids]
         try:
-            out_path = doc_converter.merge_to_pdf(remaining_paths, self.output_dir, self.output_name)
+            out_path = doc_converter.merge_to_pdf(
+                remaining_paths, self.output_dir, self.output_name, passwords=self.passwords,
+            )
             self.merge_finished.emit(True, out_path)
         except Exception as exc:  # noqa: BLE001 - surface everything to the UI, never crash silently
             self.merge_finished.emit(False, str(exc))

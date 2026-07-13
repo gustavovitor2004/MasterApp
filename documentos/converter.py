@@ -72,6 +72,18 @@ def can_convert(source_ext: str, target_ext: str) -> bool:
     return target_ext in available_targets(source_ext)
 
 
+def is_pdf_encrypted(path: str) -> bool:
+    # [NOVO] detecta PDFs protegidos por senha, usados pela mesclagem para
+    # saber quais arquivos precisam de senha antes de tentar ler as páginas.
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
+
+    try:
+        return PdfReader(path).is_encrypted
+    except PdfReadError:
+        return False
+
+
 def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb=None):
     """Convert a single file, returning a list of output paths (usually one,
     except PDF->image which produces one file per page)."""
@@ -116,14 +128,18 @@ def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb
 # cada arquivo não-PDF é primeiro convertido para um PDF individual em uma
 # pasta temporária (apagada ao final), e todos os PDFs (originais + gerados)
 # são unidos, na ordem recebida, com pypdf.
-def merge_to_pdf(paths, output_dir: str, output_name: str = None) -> str:
+def merge_to_pdf(paths, output_dir: str, output_name: str = None, passwords: dict = None) -> str:
     """Merge several files (images, PDFs, DOCX, TXT - any mix) into a
     single PDF, one source file's pages appended after another, in the
-    given order. Returns the output path."""
-    from pypdf import PdfWriter
+    given order. Returns the output path.
+
+    `passwords` is an optional {path: password} map - [NOVO] used to open
+    password-protected PDFs so they can be merged like any other file."""
+    from pypdf import PdfReader, PdfWriter
 
     if not paths:
         raise ValueError("Nenhum arquivo para mesclar.")
+    passwords = passwords or {}
 
     os.makedirs(output_dir, exist_ok=True)
     writer = PdfWriter()
@@ -132,10 +148,21 @@ def merge_to_pdf(paths, output_dir: str, output_name: str = None) -> str:
         for path in paths:
             ext = os.path.splitext(path)[1].lower().lstrip(".")
             if ext == "pdf":
-                pdf_path = path
+                # [NOVO] PDFs protegidos por senha são descriptografados
+                # antes de serem anexados - sem isso, pypdf recusa ler as
+                # páginas de um PDF criptografado.
+                reader = PdfReader(path)
+                if reader.is_encrypted:
+                    password = passwords.get(path, "")
+                    if reader.decrypt(password) == 0:
+                        raise ValueError(
+                            f"Senha incorreta (ou não informada) para o arquivo protegido "
+                            f"\"{os.path.basename(path)}\"."
+                        )
+                writer.append(reader)
             else:
                 pdf_path = convert_file(path, "pdf", temp_dir)[0]
-            writer.append(pdf_path)
+                writer.append(pdf_path)
 
         base_name = safe_filename(os.path.splitext(output_name)[0]) if output_name else "documento_mesclado"
         out_path = _unique_path(output_dir, base_name, "pdf")

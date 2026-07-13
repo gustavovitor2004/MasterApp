@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QProgressBar, QFileDialog, QCheckBox,
     QMessageBox, QFrame, QTextEdit, QTabWidget, QApplication, QInputDialog,
+    QLineEdit,
 )
 
 from documentos import ocr_engine
@@ -663,6 +664,28 @@ class ConvertSubTab(QWidget):
 
         self._merge_active = self.merge_checkbox.isVisible() and self.merge_checkbox.isChecked()
 
+        passwords = {}
+        if self._merge_active:
+            # [NOVO] PDFs protegidos por senha precisam ser desbloqueados
+            # antes de entrar na mesclagem - pergunta a senha de cada um
+            # aqui (na thread principal, antes do worker começar) e cancela
+            # a mesclagem inteira se o usuário desistir de alguma senha.
+            for job in self.jobs:
+                path = job["path"]
+                if os.path.splitext(path)[1].lower().lstrip(".") != "pdf":
+                    continue
+                if not doc_converter.is_pdf_encrypted(path):
+                    continue
+                password, ok = QInputDialog.getText(
+                    self, "Senha necessária",
+                    f"O arquivo \"{os.path.basename(path)}\" está protegido por senha.\n"
+                    "Digite a senha para incluí-lo na mesclagem:",
+                    QLineEdit.EchoMode.Password,
+                )
+                if not ok:
+                    return
+                passwords[path] = password
+
         output_name = None
         if self._merge_active:
             # [NOVO] pede o nome do arquivo final mesclado
@@ -707,6 +730,7 @@ class ConvertSubTab(QWidget):
         self.worker = ConversionWorker(
             job_snapshot, output_dir, target_ext,
             merge=self._merge_active, skip_ids=self._skip_ids, output_name=output_name,
+            passwords=passwords,
         )
         self.worker.file_started.connect(self._on_file_started)
         self.worker.file_finished.connect(self._on_file_finished)

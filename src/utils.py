@@ -92,8 +92,7 @@ def split_urls(text: str) -> list:
 
 # ---------------------------------------------------------------------------
 # Subprocess helpers shared by every module that shells out to a helper
-# binary (ffmpeg/ffprobe in converter.py, tesseract in documentos/ocr_engine.py,
-# soffice in documentos/converter.py)
+# binary (ffmpeg/ffprobe in converter.py, soffice in documentos/converter.py)
 # ---------------------------------------------------------------------------
 
 def no_window_flags():
@@ -206,7 +205,7 @@ def unique_path(directory: str, base_name: str, ext: str) -> str:
     """Build a path for `<directory>/<base_name>.<ext>`, appending " (1)",
     " (2)", etc. until it doesn't collide with an existing file. Shared by
     every module that writes converted/exported output (the top-level
-    converter.py, documentos/converter.py, documentos/ocr_engine.py)."""
+    converter.py, documentos/converter.py)."""
     candidate = os.path.join(directory, f"{base_name}.{ext}")
     counter = 1
     while os.path.exists(candidate):

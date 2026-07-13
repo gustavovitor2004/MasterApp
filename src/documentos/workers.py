@@ -1,54 +1,49 @@
 """
 documentos/workers.py
 
-QThread-based background workers for the Documentos tab: one for OCR
-digitization, one for batch format conversion.
+QThread-based background workers for the Documentos tab: one for document
+scanning (perspective correction + enhancement), one for batch format
+conversion.
 
 Note on threading style: the rest of the app (downloader.py, the top-level
 converter.py) uses a persistent QObject "manager" running plain
 threading.Thread workers behind a small dispatcher loop, because those
 features manage an ongoing, pause/resume-able download or conversion
-*queue*. The Documentos tab's OCR and conversion actions are one-shot,
+*queue*. The Documentos tab's scanning and conversion actions are one-shot,
 started-by-a-button operations with a simple start -> progress -> finished
 lifecycle, so a QThread per action (started fresh each click) is the
 simpler, equally thread-safe fit here - QThread's signals are marshaled to
 the GUI thread exactly like the QObject signals used elsewhere in the app.
 """
 
-import os
 import time
 
 from PySide6.QtCore import QThread, Signal
 
-from documentos import ocr_engine
+from documentos import scanner_engine
 from documentos import converter as doc_converter
 
 
-class OcrWorker(QThread):
-    page_progress = Signal(int, int)   # current page, total pages
-    finished_ok = Signal(str, float)   # extracted text, elapsed seconds
+class ScannerWorker(QThread):
+    """Runs the document-scanning pipeline (warp + enhance) off the GUI
+    thread - a real photo can take a noticeable fraction of a second to
+    process, which would otherwise stall the interface."""
+
+    finished_ok = Signal(object, float)   # processed BGR numpy image, elapsed seconds
     failed = Signal(str)
 
-    def __init__(self, file_path: str, lang: str, tesseract_path: str, parent=None):
+    def __init__(self, image_path: str, corners, mode: str, parent=None):
         super().__init__(parent)
-        self.file_path = file_path
-        self.lang = lang
-        self.tesseract_path = tesseract_path
+        self.image_path = image_path
+        self.corners = corners
+        self.mode = mode
 
     def run(self):
         start = time.monotonic()
         try:
-            ext = os.path.splitext(self.file_path)[1].lower().lstrip(".")
-            if ext == "pdf":
-                text = ocr_engine.ocr_pdf(
-                    self.file_path, self.lang, self.tesseract_path,
-                    progress_cb=lambda current, total: self.page_progress.emit(current, total),
-                )
-            else:
-                self.page_progress.emit(1, 1)
-                text = ocr_engine.ocr_image(self.file_path, self.lang, self.tesseract_path)
+            result = scanner_engine.process_document(self.image_path, self.corners, self.mode)
             elapsed = time.monotonic() - start
-            self.finished_ok.emit(text, elapsed)
+            self.finished_ok.emit(result, elapsed)
         except Exception as exc:  # noqa: BLE001 - surface everything to the UI, never crash silently
             self.failed.emit(str(exc))
 

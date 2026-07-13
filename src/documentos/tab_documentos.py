@@ -1,11 +1,12 @@
 """
 documentos/tab_documentos.py
 
-The "Documentos" tab widget: registers two sub-tabs, "Digitalizar" (OCR)
-and "Converter Formato" (local document conversion). Reuses the same
-visual system established in ui.py/theme.py - QFrame#Card (with the
-dynamic "status" property that colors its left border), the four
-QPushButton variants (#Primary/#Secondary/#Ghost/#Danger), and
+The "Documentos" tab widget: registers two sub-tabs, "Digitalizar"
+(document scanner: perspective correction + image enhancement) and
+"Converter Formato" (local document conversion). Reuses the same visual
+system established in ui.py/theme.py - QFrame#Card (with the dynamic
+"status" property that colors its left border), the four QPushButton
+variants (#Primary/#Secondary/#Ghost/#Danger), and
 QLabel#Dim/#ErrorLabel/#StatusDone/#StatusError - so it inherits the app's
 theme (dark/light) automatically through the single app-wide stylesheet
 theme.apply_theme() sets, with no Documentos-specific styling needed.
@@ -14,281 +15,476 @@ theme.apply_theme() sets, with no Documentos-specific styling needed.
 import itertools
 import os
 
-from PIL import Image
-from PySide6.QtCore import Qt, QSize, QUrl
-from PySide6.QtGui import QDesktopServices, QImage, QPixmap
+import cv2
+import numpy as np
+from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QUrl
+from PySide6.QtGui import QDesktopServices, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QProgressBar, QFileDialog, QCheckBox,
-    QMessageBox, QFrame, QTextEdit, QTabWidget, QApplication, QInputDialog,
-    QLineEdit,
+    QMessageBox, QFrame, QTabWidget, QInputDialog, QLineEdit,
+    QRadioButton, QButtonGroup,
 )
 
-from documentos import ocr_engine
+from documentos import scanner_engine
 from documentos import converter as doc_converter
-from documentos.workers import OcrWorker, ConversionWorker
+from documentos.workers import ScannerWorker, ConversionWorker
 from settings import save_settings
 from theme import repolish
 from utils import format_size
 
-PREVIEW_SIZE = QSize(270, 280)
+
+def _bgr_to_qpixmap(image_bgr: np.ndarray) -> QPixmap:
+    """Convert an OpenCV BGR numpy array into a QPixmap for display. Copies
+    the QImage explicitly so the pixmap doesn't end up depending on the
+    numpy array's buffer staying alive."""
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    rgb = np.ascontiguousarray(rgb)
+    height, width, channels = rgb.shape
+    qimage = QImage(rgb.data, width, height, channels * width, QImage.Format_RGB888)
+    return QPixmap.fromImage(qimage.copy())
 
 
-class OcrSubTab(QWidget):
-    """Feature 1 - Digitalização (OCR): pick an image or scanned PDF, run
-    OCR in a background QThread, edit and export the extracted text."""
+class CornerEditor(QWidget):
+    """Shows an image with 4 draggable corner handles the user can
+    reposition to fine-tune automatic document-edge detection.
+
+    All state (`self.corners`) is kept in ORIGINAL IMAGE pixel coordinates
+    - the only thing that depends on this widget's current (scaled,
+    letterboxed) size is the paint/hit-test math, computed fresh every time
+    so the handles stay correctly aligned across window resizes."""
+
+    HANDLE_RADIUS = 8
+    HANDLE_HIT_RADIUS = 18
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(280, 320)
+        self.setMouseTracking(True)
+        self.pixmap = None
+        self.image_size = (0, 0)   # (w, h) of the ORIGINAL image
+        self.corners = []          # 4 (x, y) points in ORIGINAL image space
+        self._dragging_index = None
+
+    def set_image(self, path: str, corners=None):
+        self.pixmap = QPixmap(path)
+        self.image_size = (self.pixmap.width(), self.pixmap.height())
+        if corners is not None and len(corners) == 4:
+            self.corners = [(float(x), float(y)) for x, y in corners]
+        else:
+            w, h = self.image_size
+            self.corners = [(0, 0), (w, 0), (w, h), (0, h)]
+        self._dragging_index = None
+        self.update()
+
+    def clear(self):
+        self.pixmap = None
+        self.image_size = (0, 0)
+        self.corners = []
+        self._dragging_index = None
+        self.update()
+
+    def has_image(self) -> bool:
+        return self.pixmap is not None and not self.pixmap.isNull()
+
+    def get_corners(self):
+        return list(self.corners)
+
+    # --- coordinate mapping between image space and this widget's space -----
+
+    def _fit_rect(self):
+        if not self.has_image():
+            return 1.0, 0.0, 0.0
+        img_w, img_h = self.image_size
+        if img_w <= 0 or img_h <= 0:
+            return 1.0, 0.0, 0.0
+        widget_w, widget_h = max(self.width(), 1), max(self.height(), 1)
+        scale = min(widget_w / img_w, widget_h / img_h)
+        offset_x = (widget_w - img_w * scale) / 2
+        offset_y = (widget_h - img_h * scale) / 2
+        return scale, offset_x, offset_y
+
+    def _to_widget(self, point):
+        scale, offset_x, offset_y = self._fit_rect()
+        x, y = point
+        return offset_x + x * scale, offset_y + y * scale
+
+    def _to_image(self, x, y):
+        scale, offset_x, offset_y = self._fit_rect()
+        if scale <= 0:
+            return 0.0, 0.0
+        img_w, img_h = self.image_size
+        ix = max(0.0, min((x - offset_x) / scale, img_w))
+        iy = max(0.0, min((y - offset_y) / scale, img_h))
+        return ix, iy
+
+    # --- painting -------------------------------------------------------------
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        if not self.has_image():
+            painter.setPen(QPen(Qt.gray))
+            painter.drawText(self.rect(), Qt.AlignCenter, "Nenhuma imagem selecionada")
+            return
+
+        scale, offset_x, offset_y = self._fit_rect()
+        img_w, img_h = self.image_size
+        target = QRectF(offset_x, offset_y, img_w * scale, img_h * scale)
+        painter.drawPixmap(target, self.pixmap, QRectF(self.pixmap.rect()))
+
+        if len(self.corners) == 4:
+            widget_points = [self._to_widget(p) for p in self.corners]
+            polygon = QPolygonF([QPointF(x, y) for x, y in widget_points])
+
+            painter.setPen(QPen(Qt.green, 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPolygon(polygon)
+
+            painter.setBrush(Qt.green)
+            painter.setPen(QPen(Qt.darkGreen, 1))
+            for x, y in widget_points:
+                painter.drawEllipse(QRectF(x - self.HANDLE_RADIUS, y - self.HANDLE_RADIUS,
+                                            self.HANDLE_RADIUS * 2, self.HANDLE_RADIUS * 2))
+
+    # --- mouse interaction -----------------------------------------------------
+
+    def _hit_test(self, x, y):
+        widget_points = [self._to_widget(p) for p in self.corners]
+        for index, (px, py) in enumerate(widget_points):
+            if ((px - x) ** 2 + (py - y) ** 2) ** 0.5 <= self.HANDLE_HIT_RADIUS:
+                return index
+        return None
+
+    def mousePressEvent(self, event):
+        if not self.has_image() or len(self.corners) != 4:
+            return
+        pos = event.position()
+        self._dragging_index = self._hit_test(pos.x(), pos.y())
+
+    def mouseMoveEvent(self, event):
+        if self._dragging_index is None:
+            return
+        pos = event.position()
+        self.corners[self._dragging_index] = self._to_image(pos.x(), pos.y())
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        self._dragging_index = None
+
+
+class ScannerSubTab(QWidget):
+    """Feature 1 - Digitalizar: turn a raw phone-camera photo of a document
+    into a clean, perspective-corrected, enhanced scan (color, grayscale,
+    or classic black & white "scanner" look) - 100% local via OpenCV, no
+    text extraction involved."""
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
-        self.current_file = None
+        self.current_path = None
+        self.original_pixmap = None
+        self.result_image = None      # processed BGR numpy array
+        self.result_pixmap = None
+        self.showing_original = False
         self.worker = None
 
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        # --- left column: preview + controls ---------------------------------
+        panels_row = QHBoxLayout()
+        panels_row.setSpacing(12)
+
+        # --- left: original photo + draggable corner handles -----------------
         left_card = QFrame()
         left_card.setObjectName("Card")
-        left_card.setFixedWidth(300)
         left_layout = QVBoxLayout(left_card)
-        left_layout.setContentsMargins(12, 12, 12, 12)
-        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(10, 10, 10, 10)
+        left_layout.setSpacing(6)
+        left_layout.addWidget(self._section_label("IMAGEM ORIGINAL"))
+        self.corner_editor = CornerEditor()
+        left_layout.addWidget(self.corner_editor, stretch=1)
+        self.detect_note_label = QLabel("")
+        self.detect_note_label.setObjectName("Dim")
+        self.detect_note_label.setWordWrap(True)
+        left_layout.addWidget(self.detect_note_label)
+        panels_row.addWidget(left_card, stretch=1)
 
-        self.preview_label = QLabel("📄\n\nNenhum arquivo selecionado")
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setFixedSize(PREVIEW_SIZE)
-        self.preview_label.setStyleSheet("background-color: rgba(255,255,255,15); border-radius: 6px;")
-        self.preview_label.setWordWrap(True)
-        left_layout.addWidget(self.preview_label)
-
-        self.select_btn = QPushButton("📂 Selecionar Arquivo")
-        self.select_btn.setObjectName("Secondary")
-        self.select_btn.clicked.connect(self.on_select_file)
-        left_layout.addWidget(self.select_btn)
-
-        lang_row = QHBoxLayout()
-        lang_row.addWidget(QLabel("Idioma:"))
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItems(list(ocr_engine.LANGUAGE_CHOICES.keys()))
-        lang_row.addWidget(self.lang_combo, stretch=1)
-        left_layout.addLayout(lang_row)
-
-        self.digitize_btn = QPushButton("🔍 Digitalizar")
-        self.digitize_btn.setObjectName("Primary")
-        self.digitize_btn.setEnabled(False)
-        self.digitize_btn.clicked.connect(self.on_digitize_clicked)
-        left_layout.addWidget(self.digitize_btn)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        left_layout.addWidget(self.progress_bar)
-
-        self.status_label = QLabel("")
-        self.status_label.setObjectName("Dim")
-        self.status_label.setWordWrap(True)
-        left_layout.addWidget(self.status_label)
-
-        left_layout.addStretch(1)
-        layout.addWidget(left_card)
-
-        # --- right column: extracted text -------------------------------------
+        # --- right: processed result ------------------------------------------
         right_card = QFrame()
         right_card.setObjectName("Card")
         right_layout = QVBoxLayout(right_card)
-        right_layout.setContentsMargins(12, 12, 12, 12)
-        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(10, 10, 10, 10)
+        right_layout.setSpacing(6)
+        right_layout.addWidget(self._section_label("RESULTADO"))
+        self.result_label = QLabel("Nenhum resultado ainda")
+        self.result_label.setAlignment(Qt.AlignCenter)
+        self.result_label.setWordWrap(True)
+        self.result_label.setMinimumSize(240, 240)
+        self.result_label.setStyleSheet("background-color: rgba(255,255,255,15); border-radius: 6px;")
+        right_layout.addWidget(self.result_label, stretch=1)
 
-        right_layout.addWidget(QLabel("Texto extraído:"))
-        self.text_edit = QTextEdit()
-        self.text_edit.setPlaceholderText(
-            "O texto digitalizado vai aparecer aqui e pode ser editado antes de salvar."
-        )
-        right_layout.addWidget(self.text_edit, stretch=1)
+        result_footer = QHBoxLayout()
+        self.toggle_view_btn = QPushButton("👁 Ver original")
+        self.toggle_view_btn.setObjectName("Ghost")
+        self.toggle_view_btn.setEnabled(False)
+        self.toggle_view_btn.clicked.connect(self.on_toggle_view)
+        result_footer.addWidget(self.toggle_view_btn)
+        result_footer.addStretch(1)
+        self.elapsed_label = QLabel("")
+        self.elapsed_label.setObjectName("Dim")
+        result_footer.addWidget(self.elapsed_label)
+        right_layout.addLayout(result_footer)
 
-        buttons_row = QHBoxLayout()
-        self.copy_btn = QPushButton("📋 Copiar Texto")
-        self.copy_btn.setObjectName("Secondary")
-        self.copy_btn.setEnabled(False)
-        self.copy_btn.clicked.connect(self.on_copy_text)
-        buttons_row.addWidget(self.copy_btn)
+        panels_row.addWidget(right_card, stretch=1)
+        layout.addLayout(panels_row, stretch=1)
 
-        self.save_txt_btn = QPushButton("💾 Salvar como .TXT")
-        self.save_txt_btn.setObjectName("Secondary")
-        self.save_txt_btn.setEnabled(False)
-        self.save_txt_btn.clicked.connect(lambda: self.on_save_as("txt"))
-        buttons_row.addWidget(self.save_txt_btn)
+        # --- output mode ------------------------------------------------------
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Modo:"))
+        self.mode_group = QButtonGroup(self)
+        self.color_radio = QRadioButton("Colorido")
+        self.color_radio.setChecked(True)
+        self.grayscale_radio = QRadioButton("Escala de cinza")
+        self.bw_radio = QRadioButton("Preto e branco (Scanner)")
+        for radio in (self.color_radio, self.grayscale_radio, self.bw_radio):
+            self.mode_group.addButton(radio)
+            mode_row.addWidget(radio)
+        mode_row.addStretch(1)
+        layout.addLayout(mode_row)
 
-        self.save_docx_btn = QPushButton("💾 Salvar como .DOCX")
-        self.save_docx_btn.setObjectName("Secondary")
-        self.save_docx_btn.setEnabled(False)
-        self.save_docx_btn.clicked.connect(lambda: self.on_save_as("docx"))
-        buttons_row.addWidget(self.save_docx_btn)
+        # --- select / scan ------------------------------------------------------
+        action_row = QHBoxLayout()
+        self.select_btn = QPushButton("📂 Selecionar Imagem")
+        self.select_btn.setObjectName("Secondary")
+        self.select_btn.clicked.connect(self.on_select_file)
+        action_row.addWidget(self.select_btn)
 
-        self.save_pdf_btn = QPushButton("💾 Salvar como .PDF")
+        self.scan_btn = QPushButton("✨ Digitalizar")
+        self.scan_btn.setObjectName("Primary")
+        self.scan_btn.setEnabled(False)
+        self.scan_btn.clicked.connect(self.on_scan_clicked)
+        action_row.addWidget(self.scan_btn)
+
+        action_row.addStretch(1)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFixedWidth(160)
+        self.progress_bar.setVisible(False)
+        action_row.addWidget(self.progress_bar)
+        layout.addLayout(action_row)
+
+        # --- save row --------------------------------------------------------
+        save_row = QHBoxLayout()
+        self.save_jpeg_btn = QPushButton("💾 JPEG")
+        self.save_jpeg_btn.setObjectName("Secondary")
+        self.save_jpeg_btn.setEnabled(False)
+        self.save_jpeg_btn.clicked.connect(lambda: self.on_save_as("jpeg"))
+        save_row.addWidget(self.save_jpeg_btn)
+
+        self.save_png_btn = QPushButton("💾 PNG")
+        self.save_png_btn.setObjectName("Secondary")
+        self.save_png_btn.setEnabled(False)
+        self.save_png_btn.clicked.connect(lambda: self.on_save_as("png"))
+        save_row.addWidget(self.save_png_btn)
+
+        self.save_pdf_btn = QPushButton("💾 PDF")
         self.save_pdf_btn.setObjectName("Secondary")
         self.save_pdf_btn.setEnabled(False)
         self.save_pdf_btn.clicked.connect(lambda: self.on_save_as("pdf"))
-        buttons_row.addWidget(self.save_pdf_btn)
+        save_row.addWidget(self.save_pdf_btn)
 
-        right_layout.addLayout(buttons_row)
-        layout.addWidget(right_card, stretch=1)
+        self.reset_btn = QPushButton("🔄 Processar outra imagem")
+        self.reset_btn.setObjectName("Ghost")
+        self.reset_btn.clicked.connect(self.on_reset)
+        save_row.addWidget(self.reset_btn)
 
-        self._check_tesseract_on_start()
+        save_row.addStretch(1)
+        layout.addLayout(save_row)
 
-    # ------------------------------------------------------------------
-    # Startup check
-    # ------------------------------------------------------------------
+    def _section_label(self, text):
+        label = QLabel(text)
+        label.setObjectName("SectionLabel")
+        return label
 
-    def _check_tesseract_on_start(self):
-        path = ocr_engine.find_tesseract()
-        if not ocr_engine.tesseract_is_working(path):
-            QMessageBox.warning(
-                self,
-                "Tesseract OCR não encontrado",
-                "O Tesseract OCR não foi encontrado neste computador.\n\n"
-                "Ele é necessário para a função de Digitalização (OCR) "
-                "funcionar - sem ele, o botão \"Digitalizar\" vai mostrar "
-                "erro.\n\n"
-                "Windows: baixe o instalador em\n"
-                "https://github.com/UB-Mannheim/tesseract/wiki\n\n"
-                "Durante a instalação, marque os pacotes de idioma "
-                "Português e Inglês. Depois, adicione a pasta de instalação "
-                "(normalmente C:\\Program Files\\Tesseract-OCR) ao PATH do "
-                "Windows - ou apenas reinicie o app após instalar, ele "
-                "detecta esse caminho padrão automaticamente.",
-            )
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh_result_display()
 
     # ------------------------------------------------------------------
-    # File selection + preview
+    # File selection + automatic edge detection
     # ------------------------------------------------------------------
 
     def on_select_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Selecionar arquivo para digitalizar",
+            "Selecionar imagem do documento",
             "",
-            "Imagens e PDFs (*.jpg *.jpeg *.png *.bmp *.tiff *.webp *.pdf)",
+            "Imagens (*.jpg *.jpeg *.png *.bmp *.webp *.tiff)",
         )
         if not path:
             return
-        self.current_file = path
-        self.digitize_btn.setEnabled(True)
-        self.status_label.setText(os.path.basename(path))
-        self._update_preview(path)
+        self._load_image(path)
 
-    def _update_preview(self, path):
-        ext = os.path.splitext(path)[1].lower().lstrip(".")
+    def _load_image(self, path):
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            QMessageBox.critical(self, "Erro ao abrir imagem", f"Não foi possível abrir:\n{path}")
+            return
+
+        self.current_path = path
+        self.original_pixmap = pixmap
+
+        corners = None
         try:
-            if ext == "pdf":
-                from pdf2image import convert_from_path
-                pages = convert_from_path(path, dpi=100, first_page=1, last_page=1)
-                if pages:
-                    self._set_preview_image(pages[0])
-                    return
-            else:
-                self._set_preview_image(Image.open(path))
-                return
+            image = scanner_engine.load_image(path)
+            corners = scanner_engine.detect_document_corners(image)
         except Exception:
-            pass  # preview is a nice-to-have, never fatal
-        self.preview_label.setPixmap(QPixmap())
-        self.preview_label.setText(f"📄\n\n{os.path.basename(path)}")
+            corners = None
 
-    def _set_preview_image(self, pil_image):
-        pil_image = pil_image.convert("RGB")
-        data = pil_image.tobytes("raw", "RGB")
-        qimage = QImage(data, pil_image.width, pil_image.height, pil_image.width * 3, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimage).scaled(
-            self.preview_label.width(), self.preview_label.height(),
-            Qt.KeepAspectRatio, Qt.SmoothTransformation,
-        )
-        self.preview_label.setText("")
-        self.preview_label.setPixmap(pixmap)
-
-    # ------------------------------------------------------------------
-    # OCR run
-    # ------------------------------------------------------------------
-
-    def on_digitize_clicked(self):
-        if not self.current_file:
-            return
-        tesseract_path = ocr_engine.find_tesseract()
-        if not ocr_engine.tesseract_is_working(tesseract_path):
-            QMessageBox.warning(
-                self,
-                "Tesseract OCR não encontrado",
-                "Instale o Tesseract OCR antes de digitalizar "
-                "(https://github.com/UB-Mannheim/tesseract/wiki) e "
-                "reinicie o app.",
+        self.corner_editor.set_image(path, corners)
+        if corners is None:
+            self.detect_note_label.setText(
+                "Bordas não detectadas automaticamente. Ajuste manualmente arrastando os cantos."
             )
+        else:
+            self.detect_note_label.setText(
+                "Bordas detectadas automaticamente. Arraste os pontos para ajustar."
+            )
+
+        self.scan_btn.setEnabled(True)
+        self.result_image = None
+        self.result_pixmap = None
+        self.showing_original = False
+        self.result_label.setPixmap(QPixmap())
+        self.result_label.setText("Nenhum resultado ainda")
+        self.toggle_view_btn.setEnabled(False)
+        self.toggle_view_btn.setText("👁 Ver original")
+        self.elapsed_label.setText("")
+        for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
+            btn.setEnabled(False)
+
+    # ------------------------------------------------------------------
+    # Scan run
+    # ------------------------------------------------------------------
+
+    def on_scan_clicked(self):
+        if not self.current_path:
+            return
+        corners = self.corner_editor.get_corners()
+        if len(corners) != 4:
             return
 
-        lang_label = self.lang_combo.currentText()
-        lang_code = ocr_engine.LANGUAGE_CHOICES.get(lang_label, "por+eng")
-
-        self.digitize_btn.setEnabled(False)
+        self.scan_btn.setEnabled(False)
         self.select_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # indeterminate "spinner" until we know the page count
-        self.status_label.setText("Digitalizando...")
 
-        self.worker = OcrWorker(self.current_file, lang_code, tesseract_path)
-        self.worker.page_progress.connect(self._on_page_progress)
-        self.worker.finished_ok.connect(self._on_ocr_finished)
-        self.worker.failed.connect(self._on_ocr_failed)
+        self.worker = ScannerWorker(self.current_path, corners, self._selected_mode())
+        self.worker.finished_ok.connect(self._on_scan_finished)
+        self.worker.failed.connect(self._on_scan_failed)
         self.worker.start()
 
-    def _on_page_progress(self, current, total):
-        if total > 1:
-            self.progress_bar.setRange(0, total)
-            self.progress_bar.setValue(current)
-            self.status_label.setText(f"Página {current} de {total}...")
-        else:
-            self.status_label.setText("Digitalizando...")
+    def _selected_mode(self) -> str:
+        if self.grayscale_radio.isChecked():
+            return scanner_engine.MODE_GRAYSCALE
+        if self.bw_radio.isChecked():
+            return scanner_engine.MODE_BW
+        return scanner_engine.MODE_COLOR
 
-    def _on_ocr_finished(self, text, elapsed):
-        self.text_edit.setPlainText(text)
-        self.progress_bar.setVisible(False)
-        self.digitize_btn.setEnabled(True)
-        self.select_btn.setEnabled(True)
-        has_text = bool(text.strip())
-        self.copy_btn.setEnabled(has_text)
-        self.save_txt_btn.setEnabled(has_text)
-        self.save_docx_btn.setEnabled(has_text)
-        self.save_pdf_btn.setEnabled(has_text)
-        self.status_label.setText(f"Concluído em {elapsed:.1f}s")
+    def _on_scan_finished(self, image_bgr, elapsed):
+        self.result_image = image_bgr
+        self.result_pixmap = _bgr_to_qpixmap(image_bgr)
+        self.showing_original = False
+        self._refresh_result_display()
 
-    def _on_ocr_failed(self, message):
         self.progress_bar.setVisible(False)
-        self.digitize_btn.setEnabled(True)
+        self.scan_btn.setEnabled(True)
         self.select_btn.setEnabled(True)
-        self.status_label.setText("Erro na digitalização")
-        QMessageBox.critical(self, "Erro na digitalização", message)
+        self.toggle_view_btn.setEnabled(True)
+        self.toggle_view_btn.setText("👁 Ver original")
+        for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
+            btn.setEnabled(True)
+        self.elapsed_label.setText(f"Processado em {elapsed:.1f}s")
+
+    def _on_scan_failed(self, message):
+        self.progress_bar.setVisible(False)
+        self.scan_btn.setEnabled(True)
+        self.select_btn.setEnabled(True)
+        QMessageBox.critical(self, "Erro ao digitalizar", message)
 
     # ------------------------------------------------------------------
-    # Export
+    # Result preview (before/after toggle)
     # ------------------------------------------------------------------
 
-    def on_copy_text(self):
-        QApplication.clipboard().setText(self.text_edit.toPlainText())
+    def on_toggle_view(self):
+        self.showing_original = not self.showing_original
+        self.toggle_view_btn.setText(
+            "👁 Ver digitalizado" if self.showing_original else "👁 Ver original"
+        )
+        self._refresh_result_display()
+
+    def _refresh_result_display(self):
+        pixmap = self.original_pixmap if self.showing_original else self.result_pixmap
+        if pixmap is None or pixmap.isNull():
+            return
+        scaled = pixmap.scaled(
+            self.result_label.width(), self.result_label.height(),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        )
+        self.result_label.setText("")
+        self.result_label.setPixmap(scaled)
+
+    # ------------------------------------------------------------------
+    # Save / reset
+    # ------------------------------------------------------------------
 
     def on_save_as(self, fmt):
-        text = self.text_edit.toPlainText()
-        if not text.strip():
+        if self.result_image is None:
             return
-        base_name = os.path.splitext(os.path.basename(self.current_file or "documento"))[0]
         output_dir = self.settings.ocr_output_dir
+        os.makedirs(output_dir, exist_ok=True)
+
+        filters = {
+            "jpeg": ("Imagem JPEG (*.jpg *.jpeg)", "jpg"),
+            "png": ("Imagem PNG (*.png)", "png"),
+            "pdf": ("Documento PDF (*.pdf)", "pdf"),
+        }
+        filter_str, ext = filters[fmt]
+        default_path = os.path.join(output_dir, f"documento_digitalizado.{ext}")
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar como", default_path, filter_str)
+        if not path:
+            return
+
         try:
-            if fmt == "txt":
-                out_path = ocr_engine.save_as_txt(text, output_dir, base_name)
-            elif fmt == "docx":
-                out_path = ocr_engine.save_as_docx(text, output_dir, base_name)
+            if fmt == "jpeg":
+                scanner_engine.save_as_jpeg(self.result_image, path)
+            elif fmt == "png":
+                scanner_engine.save_as_png(self.result_image, path)
             else:
-                out_path = ocr_engine.save_as_pdf(text, output_dir, base_name)
-            QMessageBox.information(self, "Salvo", f"Arquivo salvo em:\n{out_path}")
+                scanner_engine.save_as_pdf(self.result_image, path)
+            QMessageBox.information(self, "Salvo", f"Arquivo salvo em:\n{path}")
         except Exception as exc:  # noqa: BLE001 - never crash silently
             QMessageBox.critical(self, "Erro ao salvar", str(exc))
+
+    def on_reset(self):
+        self.current_path = None
+        self.original_pixmap = None
+        self.result_image = None
+        self.result_pixmap = None
+        self.showing_original = False
+        self.corner_editor.clear()
+        self.detect_note_label.setText("")
+        self.result_label.setPixmap(QPixmap())
+        self.result_label.setText("Nenhum resultado ainda")
+        self.scan_btn.setEnabled(False)
+        self.toggle_view_btn.setEnabled(False)
+        self.toggle_view_btn.setText("👁 Ver original")
+        self.elapsed_label.setText("")
+        for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
+            btn.setEnabled(False)
+        self.color_radio.setChecked(True)
 
 
 class DocConversionItemWidget(QFrame):
@@ -828,6 +1024,6 @@ class DocumentosTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         sub_tabs = QTabWidget()
-        sub_tabs.addTab(OcrSubTab(settings), "🔍 Digitalizar")
+        sub_tabs.addTab(ScannerSubTab(settings), "🔍 Digitalizar")
         sub_tabs.addTab(ConvertSubTab(settings), "🔄 Converter Formato")
         layout.addWidget(sub_tabs)

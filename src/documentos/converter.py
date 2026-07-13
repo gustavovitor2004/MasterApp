@@ -20,10 +20,26 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from documentos.ocr_engine import wrap_poppler_error
 from utils import no_window_flags, safe_filename, unique_path
 
 IMAGE_EXTS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
+
+POPPLER_INSTALL_MESSAGE = (
+    "O poppler não foi encontrado neste computador. Ele é necessário para "
+    "processar arquivos PDF (conversão de/para PDF).\n\n"
+    "Windows: baixe em "
+    "https://github.com/oschwartz10612/poppler-windows/releases, extraia o "
+    ".zip e adicione a pasta \"Library\\bin\" ao PATH do Windows."
+)
+
+
+def wrap_poppler_error(exc: Exception) -> Exception:
+    """Normalize a pdf2image failure into a clear PT-BR message when it's
+    caused by poppler being missing."""
+    message = str(exc)
+    if "poppler" in message.lower() or exc.__class__.__name__ == "PDFInfoNotInstalledError":
+        return RuntimeError(POPPLER_INSTALL_MESSAGE)
+    return exc
 
 # Explicit conversion table, matching the requested matrix - each format
 # lists only the destinations that actually have an implementation below.
@@ -299,23 +315,71 @@ def _docx_to_txt(path: str, output_dir: str) -> str:
 
 
 def _txt_to_pdf(path: str, output_dir: str) -> str:
-    # Reuses the text->PDF exporter already used by OCR (produces a PDF
-    # with real, searchable text - not an image).
-    from documentos.ocr_engine import save_as_pdf
-
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         text = f.read()
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
-    return save_as_pdf(text, output_dir, base)
+    return _text_to_pdf(text, output_dir, base)
 
 
 def _txt_to_docx(path: str, output_dir: str) -> str:
-    from documentos.ocr_engine import save_as_docx
-
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         text = f.read()
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
-    return save_as_docx(text, output_dir, base)
+    return _text_to_docx(text, output_dir, base)
+
+
+def _text_to_docx(text: str, output_dir: str, base_name: str) -> str:
+    from docx import Document
+
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = unique_path(output_dir, safe_filename(base_name), "docx")
+    document = Document()
+    for paragraph in text.split("\n"):
+        document.add_paragraph(paragraph)
+    document.save(out_path)
+    return out_path
+
+
+def _text_to_pdf(text: str, output_dir: str, base_name: str) -> str:
+    """Render the text as real, selectable PDF text (not an image), which
+    makes it inherently searchable."""
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = unique_path(output_dir, safe_filename(base_name), "pdf")
+    page_w, page_h = A4
+    margin = 40
+    line_height = 14
+
+    c = canvas.Canvas(out_path, pagesize=A4)
+    c.setFont("Helvetica", 10)
+    y = page_h - margin
+    for raw_line in text.split("\n"):
+        for line in _wrap_text_line(raw_line, 95):
+            if y < margin:
+                c.showPage()
+                c.setFont("Helvetica", 10)
+                y = page_h - margin
+            c.drawString(margin, y, line)
+            y -= line_height
+    c.save()
+    return out_path
+
+
+def _wrap_text_line(line: str, width: int):
+    if not line:
+        return [""]
+    words = line.split(" ")
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines or [""]
 
 
 # ---------------------------------------------------------------------------

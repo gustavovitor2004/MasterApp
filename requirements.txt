@@ -2,8 +2,11 @@ yt-dlp>=2024.8.6
 PySide6>=6.6.0
 requests>=2.31.0
 
-# Aba "Documentos" (OCR e conversao de arquivos)
-pytesseract>=0.3.10
+# Aba "Documentos" - Digitalizar (scanner: correcao de perspectiva + realce via OpenCV)
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+
+# Aba "Documentos" - Converter Formato (conversao de arquivos)
 Pillow>=10.0.0
 pdf2image>=1.16.3
 pdfplumber>=0.10.0

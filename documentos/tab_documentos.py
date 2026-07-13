@@ -570,7 +570,20 @@ class ConvertSubTab(QWidget):
         for job in self.jobs:
             ext, _ = doc_converter.detect_format(job["path"])
             union |= set(doc_converter.available_targets(ext))
+
+        # [NOVO] "PDF" é sempre uma opção de destino válida, mesmo quando a
+        # lista inteira já é só de PDFs (nesse caso a união acima não
+        # incluiria "pdf", já que um PDF não lista a si mesmo como alvo).
+        # Isso também é o que faz a caixa "Mesclar tudo em um único PDF"
+        # aparecer nesse cenário, já que ela só é mostrada quando o destino
+        # selecionado é PDF.
+        union.add("pdf")
         options = sorted(union)
+        if "pdf" in options:
+            # [NOVO] PDF tem prioridade: sempre a primeira opção da lista e,
+            # por consequência, a selecionada por padrão ao adicionar arquivos.
+            options.remove("pdf")
+            options.insert(0, "pdf")
 
         if options:
             self.target_combo.addItems([f.upper() for f in options])

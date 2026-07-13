@@ -65,14 +65,23 @@ class ConversionWorker(QThread):
     file_skipped = Signal(int, str)            # [NOVO] job_id, reason - "Não suportado" (individual mode only)
     merge_finished = Signal(bool, str)         # [NOVO] success, output_path or error message (merge mode only)
     all_finished = Signal()
+    # [NOVO] emitido (com Qt.ConnectionType.BlockingQueuedConnection) quando
+    # o merge_to_pdf() rodando NESTA thread encontra um PDF protegido sem
+    # senha conhecida - o slot conectado a isso, na thread da GUI, deve
+    # gravar a senha em self.password_response antes de retornar. Como a
+    # conexão é bloqueante, esta thread fica parada esperando o usuário
+    # digitar a senha, mas a janela do app continua respondendo normalmente
+    # (quem trava seria só esta thread de trabalho, nunca a GUI).
+    password_requested = Signal(str)
 
     def __init__(self, jobs, output_dir: str, target_ext: str, merge: bool = False,
                  skip_ids=None, output_name: str = None, passwords: dict = None, parent=None):
         """`jobs` is a list of (job_id, path) tuples, in display order.
         `merge=True` converts every job to PDF and merges them into a
         single output file named `output_name` instead of converting them
-        individually. `passwords` is an optional {path: password} map -
-        [NOVO] used to open password-protected PDFs during merge."""
+        individually. `passwords` is an optional {path: password} map with
+        passwords already known upfront - any encrypted PDF not covered by
+        it triggers `password_requested` instead."""
         super().__init__(parent)
         self.jobs = jobs
         self.output_dir = output_dir
@@ -81,6 +90,15 @@ class ConversionWorker(QThread):
         self.skip_ids = skip_ids if skip_ids is not None else set()
         self.output_name = output_name
         self.passwords = passwords or {}
+        self.password_response = None
+
+    def _ask_password(self, path: str):
+        # [NOVO] roda NESTA thread (a de conversão) - o emit() abaixo só
+        # retorna depois que o slot conectado na GUI já terminou de rodar
+        # e preencheu self.password_response, graças à conexão bloqueante.
+        self.password_response = None
+        self.password_requested.emit(path)
+        return self.password_response
 
     def run(self):
         if self.merge:
@@ -123,7 +141,8 @@ class ConversionWorker(QThread):
         remaining_paths = [path for job_id, path in self.jobs if job_id not in self.skip_ids]
         try:
             out_path = doc_converter.merge_to_pdf(
-                remaining_paths, self.output_dir, self.output_name, passwords=self.passwords,
+                remaining_paths, self.output_dir, self.output_name,
+                passwords=self.passwords, password_callback=self._ask_password,
             )
             self.merge_finished.emit(True, out_path)
         except Exception as exc:  # noqa: BLE001 - surface everything to the UI, never crash silently

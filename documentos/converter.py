@@ -72,18 +72,6 @@ def can_convert(source_ext: str, target_ext: str) -> bool:
     return target_ext in available_targets(source_ext)
 
 
-def is_pdf_encrypted(path: str) -> bool:
-    # [NOVO] detecta PDFs protegidos por senha, usados pela mesclagem para
-    # saber quais arquivos precisam de senha antes de tentar ler as páginas.
-    from pypdf import PdfReader
-    from pypdf.errors import PdfReadError
-
-    try:
-        return PdfReader(path).is_encrypted
-    except PdfReadError:
-        return False
-
-
 def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb=None):
     """Convert a single file, returning a list of output paths (usually one,
     except PDF->image which produces one file per page)."""
@@ -128,13 +116,23 @@ def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb
 # cada arquivo não-PDF é primeiro convertido para um PDF individual em uma
 # pasta temporária (apagada ao final), e todos os PDFs (originais + gerados)
 # são unidos, na ordem recebida, com pypdf.
-def merge_to_pdf(paths, output_dir: str, output_name: str = None, passwords: dict = None) -> str:
+def merge_to_pdf(paths, output_dir: str, output_name: str = None, passwords: dict = None,
+                  password_callback=None) -> str:
     """Merge several files (images, PDFs, DOCX, TXT - any mix) into a
     single PDF, one source file's pages appended after another, in the
     given order. Returns the output path.
 
-    `passwords` is an optional {path: password} map - [NOVO] used to open
-    password-protected PDFs so they can be merged like any other file."""
+    Every PDF (encrypted or not) is opened here, inside this function - so
+    this must be called off the GUI thread, since parsing a PDF's
+    structure can take a noticeable while for large/unusual files.
+
+    `passwords` is an optional {path: password} map with passwords already
+    known upfront. `password_callback`, if given, is called as
+    `password_callback(path)` - [NOVO] - for any encrypted PDF not already
+    covered by `passwords`, and must return the password to try (or None
+    to skip decryption). This indirection lets the caller (typically a
+    background worker) ask the GUI thread for a password on demand,
+    without this function needing to know anything about Qt."""
     from pypdf import PdfReader, PdfWriter
 
     if not paths:
@@ -153,8 +151,10 @@ def merge_to_pdf(paths, output_dir: str, output_name: str = None, passwords: dic
                 # páginas de um PDF criptografado.
                 reader = PdfReader(path)
                 if reader.is_encrypted:
-                    password = passwords.get(path, "")
-                    if reader.decrypt(password) == 0:
+                    password = passwords.get(path)
+                    if password is None and password_callback is not None:
+                        password = password_callback(path)
+                    if password is None or reader.decrypt(password) == 0:
                         raise ValueError(
                             f"Senha incorreta (ou não informada) para o arquivo protegido "
                             f"\"{os.path.basename(path)}\"."

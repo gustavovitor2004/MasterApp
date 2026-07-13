@@ -664,27 +664,13 @@ class ConvertSubTab(QWidget):
 
         self._merge_active = self.merge_checkbox.isVisible() and self.merge_checkbox.isChecked()
 
-        passwords = {}
-        if self._merge_active:
-            # [NOVO] PDFs protegidos por senha precisam ser desbloqueados
-            # antes de entrar na mesclagem - pergunta a senha de cada um
-            # aqui (na thread principal, antes do worker começar) e cancela
-            # a mesclagem inteira se o usuário desistir de alguma senha.
-            for job in self.jobs:
-                path = job["path"]
-                if os.path.splitext(path)[1].lower().lstrip(".") != "pdf":
-                    continue
-                if not doc_converter.is_pdf_encrypted(path):
-                    continue
-                password, ok = QInputDialog.getText(
-                    self, "Senha necessária",
-                    f"O arquivo \"{os.path.basename(path)}\" está protegido por senha.\n"
-                    "Digite a senha para incluí-lo na mesclagem:",
-                    QLineEdit.EchoMode.Password,
-                )
-                if not ok:
-                    return
-                passwords[path] = password
+        # [CORRIGIDO] antes, cada PDF da lista era aberto com PdfReader()
+        # AQUI, na thread da GUI, só para checar se tinha senha - isso
+        # travava a janela inteira ("Não está respondendo") sempre que um
+        # PDF real (grande, ou com estrutura fora do padrão) demorava para
+        # ser lido. Agora a checagem de senha acontece dentro do worker em
+        # segundo plano (ver _on_password_requested), e só o diálogo em si
+        # roda na GUI - a leitura pesada do PDF nunca bloqueia a janela.
 
         output_name = None
         if self._merge_active:
@@ -730,14 +716,33 @@ class ConvertSubTab(QWidget):
         self.worker = ConversionWorker(
             job_snapshot, output_dir, target_ext,
             merge=self._merge_active, skip_ids=self._skip_ids, output_name=output_name,
-            passwords=passwords,
         )
         self.worker.file_started.connect(self._on_file_started)
         self.worker.file_finished.connect(self._on_file_finished)
         self.worker.file_skipped.connect(self._on_file_skipped)
         self.worker.merge_finished.connect(self._on_merge_finished)
         self.worker.all_finished.connect(self._on_all_finished)
+        # [NOVO] conexão bloqueante: quando o worker encontra um PDF
+        # protegido, esta thread (a da GUI) mostra o diálogo de senha e só
+        # então devolve o controle ao worker - a janela nunca fica travada
+        # esperando, porque quem espera é o worker, não a GUI.
+        self.worker.password_requested.connect(
+            self._on_password_requested, Qt.ConnectionType.BlockingQueuedConnection
+        )
         self.worker.start()
+
+    def _on_password_requested(self, path):
+        # [NOVO] roda na thread da GUI, chamado (via BlockingQueuedConnection)
+        # pelo worker quando ele encontra, DURANTE a mesclagem, um PDF
+        # protegido por senha. self.worker.password_response é lido pelo
+        # worker assim que este método retorna.
+        password, ok = QInputDialog.getText(
+            self, "Senha necessária",
+            f"O arquivo \"{os.path.basename(path)}\" está protegido por senha.\n"
+            "Digite a senha para incluí-lo na mesclagem:",
+            QLineEdit.EchoMode.Password,
+        )
+        self.worker.password_response = password if ok else None
 
     def _on_file_started(self, job_id):
         widget = self._item_widgets.get(job_id)

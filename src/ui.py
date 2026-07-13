@@ -2,8 +2,8 @@
 ui.py
 
 All GUI components, built with PySide6:
-- MainWindow: URL input, quality/folder controls, download queue list, queue
-  controls.
+- MainWindow: header, tab bar, URL input, quality/folder controls, download
+  queue list, queue controls.
 - QueueItemWidget: one row in the download queue (thumbnail, title,
   platform/quality, progress bar, action button).
 - SettingsDialog: everything in settings.Settings, editable and persisted.
@@ -13,184 +13,65 @@ The GUI never touches yt-dlp directly - all of that goes through
 listens to. Because DownloadManager's worker threads emit those signals,
 and Qt auto-queues cross-thread signal/slot connections, none of the code
 below has to worry about thread safety.
+
+Theming is entirely centralized in `theme.py` - this module never sets an
+inline stylesheet for color/appearance purposes. Every widget that needs to
+reflect a changing state (a queue row's status, say) does it by setting a
+Qt dynamic property (`status`) and calling `theme.repolish()`, which lets
+the one stylesheet installed by `theme.apply_theme()` pick up the change.
 """
 
 import os
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QComboBox, QListWidget,
     QListWidgetItem, QProgressBar, QFileDialog, QDialog, QSpinBox, QCheckBox,
-    QMessageBox, QFrame, QSizePolicy, QScrollArea, QTabWidget,
+    QMessageBox, QFrame, QTabWidget,
 )
 
-from downloader import DownloadItem, DownloadManager, AUDIO_ONLY_LABEL
+from downloader import DownloadItem, DownloadManager
 from converter import (
     ConversionItem, ConversionManager, CATEGORY_LABELS, available_targets,
 )
 from documentos.tab_documentos import DocumentosTab
 from settings import Settings, QUALITY_CHOICES, save_settings
-from utils import is_valid_url, split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working
-
-
-DARK_COLORS = {
-    "bg": "#1a1a2e",
-    "surface": "#16213e",
-    "accent": "#0f3460",
-    "highlight": "#e94560",
-    "text": "#eaeaea",
-    "text_dim": "#a9a9c1",
-    "success": "#4caf50",
-    "error": "#f44336",
-    "progress": "#e94560",
-}
-
-LIGHT_COLORS = {
-    "bg": "#f4f5fa",
-    "surface": "#ffffff",
-    "accent": "#dbe4f0",
-    "highlight": "#e94560",
-    "text": "#1a1a2e",
-    "text_dim": "#555568",
-    "success": "#2e7d32",
-    "error": "#c62828",
-    "progress": "#e94560",
-}
-
-
-def build_stylesheet(theme: str) -> str:
-    c = DARK_COLORS if theme != "light" else LIGHT_COLORS
-    return f"""
-    QWidget {{
-        background-color: {c['bg']};
-        color: {c['text']};
-        font-family: "Segoe UI";
-        font-size: 10pt;
-    }}
-    QMainWindow {{
-        background-color: {c['bg']};
-    }}
-    #TopBar {{
-        background-color: {c['surface']};
-        border-bottom: 1px solid {c['accent']};
-    }}
-    #TitleLabel {{
-        font-size: 14pt;
-        font-weight: 600;
-    }}
-    QFrame#Card {{
-        background-color: {c['surface']};
-        border-radius: 8px;
-        border: 1px solid {c['accent']};
-    }}
-    QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {{
-        background-color: {c['surface']};
-        border: 1px solid {c['accent']};
-        border-radius: 6px;
-        padding: 6px;
-        color: {c['text']};
-    }}
-    QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus {{
-        border: 1px solid {c['highlight']};
-    }}
-    QPushButton {{
-        background-color: {c['accent']};
-        color: {c['text']};
-        border: none;
-        border-radius: 6px;
-        padding: 7px 14px;
-    }}
-    QPushButton:hover {{
-        background-color: {c['highlight']};
-        color: #ffffff;
-    }}
-    QPushButton:disabled {{
-        background-color: {c['surface']};
-        color: {c['text_dim']};
-    }}
-    QPushButton#Primary {{
-        background-color: {c['highlight']};
-        color: #ffffff;
-        font-weight: 600;
-    }}
-    QPushButton#Primary:hover {{
-        background-color: #ff6b81;
-    }}
-    QPushButton#Danger {{
-        background-color: transparent;
-        border: 1px solid {c['error']};
-        color: {c['error']};
-    }}
-    QPushButton#Danger:hover {{
-        background-color: {c['error']};
-        color: #ffffff;
-    }}
-    QListWidget {{
-        background-color: transparent;
-        border: none;
-    }}
-    QProgressBar {{
-        background-color: {c['accent']};
-        border-radius: 5px;
-        text-align: center;
-        color: {c['text']};
-        height: 10px;
-    }}
-    QProgressBar::chunk {{
-        background-color: {c['progress']};
-        border-radius: 5px;
-    }}
-    QLabel#ErrorLabel {{
-        color: {c['error']};
-    }}
-    QLabel#StatusDone {{
-        color: {c['success']};
-    }}
-    QLabel#StatusError {{
-        color: {c['error']};
-    }}
-    QLabel#Dim {{
-        color: {c['text_dim']};
-        font-size: 9pt;
-    }}
-    QScrollArea {{
-        border: none;
-    }}
-    QTabWidget::pane {{
-        border: none;
-        background-color: {c['bg']};
-    }}
-    QTabBar::tab {{
-        background-color: {c['surface']};
-        color: {c['text_dim']};
-        padding: 8px 18px;
-        margin-right: 2px;
-        border-top-left-radius: 6px;
-        border-top-right-radius: 6px;
-    }}
-    QTabBar::tab:selected {{
-        background-color: {c['accent']};
-        color: {c['text']};
-        border-bottom: 2px solid {c['highlight']};
-    }}
-    QTabBar::tab:hover {{
-        color: {c['text']};
-    }}
-    QFrame#DropZone {{
-        background-color: {c['surface']};
-        border: 2px dashed {c['accent']};
-        border-radius: 8px;
-    }}
-    QFrame#DropZone:hover {{
-        border: 2px dashed {c['highlight']};
-    }}
-    """
-
+from theme import apply_theme as set_app_theme, repolish
+from utils import split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working
 
 THUMB_SIZE = QSize(96, 54)
 CATEGORY_ICONS = {"video": "🎞", "audio": "🎵", "image": "🖼"}
+
+
+# ---------------------------------------------------------------------------
+# Small shared row-building helpers (consolidates boilerplate that used to
+# be duplicated verbatim between QueueItemWidget and ConversionItemWidget)
+# ---------------------------------------------------------------------------
+
+def make_progress_bar() -> QProgressBar:
+    bar = QProgressBar()
+    bar.setRange(0, 100)
+    bar.setValue(0)
+    bar.setTextVisible(False)
+    bar.setFixedHeight(6)
+    return bar
+
+
+def make_row_action_button(on_click) -> QPushButton:
+    btn = QPushButton("✕ Cancelar")
+    btn.setObjectName("Danger")
+    btn.setFixedWidth(140)
+    btn.clicked.connect(on_click)
+    return btn
+
+
+def set_card_status(frame: QFrame, status: str) -> None:
+    """Set the dynamic "status" property theme.py's QSS uses to color a
+    Card row's left border (waiting/active/done/error)."""
+    frame.setProperty("status", status)
+    repolish(frame)
 
 
 class QueueItemWidget(QFrame):
@@ -225,20 +106,13 @@ class QueueItemWidget(QFrame):
         text_col.addWidget(self.meta_label)
         top_row.addLayout(text_col, stretch=1)
 
-        self.action_btn = QPushButton("✕ Cancelar")
-        self.action_btn.setObjectName("Danger")
-        self.action_btn.setFixedWidth(140)
-        self.action_btn.clicked.connect(self._on_action_clicked)
+        self.action_btn = make_row_action_button(self._on_action_clicked)
         top_row.addWidget(self.action_btn, alignment=Qt.AlignTop)
 
         outer.addLayout(top_row)
 
         bottom_row = QHBoxLayout()
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedHeight(10)
+        self.progress_bar = make_progress_bar()
         bottom_row.addWidget(self.progress_bar, stretch=1)
 
         self.status_label = QLabel(DownloadItem.STATUS_WAITING)
@@ -274,17 +148,20 @@ class QueueItemWidget(QFrame):
             self.action_btn.setText("✕ Cancelar")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(True)
+            set_card_status(self, "active")
         elif status == DownloadItem.STATUS_MERGING:
             self.status_label.setText(status)
             self.action_btn.setText("✕ Cancelar")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(True)
+            set_card_status(self, "active")
         elif status == DownloadItem.STATUS_DONE:
             self.status_label.setText(status)
             self.status_label.setObjectName("StatusDone")
             self.action_btn.setText("🗑 Remover")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "done")
         elif status in (DownloadItem.STATUS_ERROR, DownloadItem.STATUS_UNAVAILABLE):
             text = status
             if item.error_message:
@@ -294,25 +171,27 @@ class QueueItemWidget(QFrame):
             self.action_btn.setText("↻ Tentar novamente")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "error")
         elif status == DownloadItem.STATUS_CANCELLED:
             self.status_label.setText(status)
             self.action_btn.setText("🗑 Remover")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "waiting")
         elif status == DownloadItem.STATUS_FETCHING:
             self.status_label.setText(status)
             self.action_btn.setText("✕ Cancelar")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "active")
         else:  # WAITING
             self.status_label.setText(status)
             self.action_btn.setText("✕ Cancelar")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "waiting")
 
-        self.status_label.setStyleSheet(self.status_label.styleSheet())  # force objectName re-poll
-        self.style().unpolish(self.status_label)
-        self.style().polish(self.status_label)
+        repolish(self.status_label)
 
     def _on_action_clicked(self):
         item = self.manager.get_item(self.item_id)
@@ -403,20 +282,13 @@ class ConversionItemWidget(QFrame):
         self.format_combo.currentTextChanged.connect(self._on_format_changed)
         top_row.addWidget(self.format_combo)
 
-        self.action_btn = QPushButton("✕ Cancelar")
-        self.action_btn.setObjectName("Danger")
-        self.action_btn.setFixedWidth(140)
-        self.action_btn.clicked.connect(self._on_action_clicked)
+        self.action_btn = make_row_action_button(self._on_action_clicked)
         top_row.addWidget(self.action_btn, alignment=Qt.AlignTop)
 
         outer.addLayout(top_row)
 
         bottom_row = QHBoxLayout()
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedHeight(10)
+        self.progress_bar = make_progress_bar()
         bottom_row.addWidget(self.progress_bar, stretch=1)
 
         self.status_label = QLabel(item.status)
@@ -450,12 +322,14 @@ class ConversionItemWidget(QFrame):
             self.action_btn.setText("✕ Cancelar")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(True)
+            set_card_status(self, "active")
         elif status == ConversionItem.STATUS_DONE:
             self.status_label.setText(status)
             self.status_label.setObjectName("StatusDone")
             self.action_btn.setText("🗑 Remover")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "done")
         elif status in (ConversionItem.STATUS_ERROR, ConversionItem.STATUS_UNSUPPORTED):
             text = status
             if item.error_message:
@@ -467,19 +341,21 @@ class ConversionItemWidget(QFrame):
             )
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "error" if status == ConversionItem.STATUS_ERROR else "waiting")
         elif status == ConversionItem.STATUS_CANCELLED:
             self.status_label.setText(status)
             self.action_btn.setText("🗑 Remover")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "waiting")
         else:  # WAITING
             self.status_label.setText(status)
             self.action_btn.setText("✕ Cancelar")
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            set_card_status(self, "waiting")
 
-        self.style().unpolish(self.status_label)
-        self.style().polish(self.status_label)
+        repolish(self.status_label)
 
     def _on_action_clicked(self):
         item = self.manager.get_item(self.item_id)
@@ -503,7 +379,6 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Configurações")
         self.setMinimumWidth(460)
         self.settings = settings
-        self._new_output_dir = settings.output_dir
 
         layout = QVBoxLayout(self)
         grid = QGridLayout()
@@ -516,6 +391,7 @@ class SettingsDialog(QDialog):
         self.folder_edit.setReadOnly(True)
         grid.addWidget(self.folder_edit, row, 1)
         browse_btn = QPushButton("📁 Escolher")
+        browse_btn.setObjectName("Secondary")
         browse_btn.clicked.connect(self._choose_folder)
         grid.addWidget(browse_btn, row, 2)
         row += 1
@@ -561,6 +437,7 @@ class SettingsDialog(QDialog):
         self.ffmpeg_path_edit.setPlaceholderText("Deixe em branco para usar o PATH do sistema")
         grid.addWidget(self.ffmpeg_path_edit, row, 1)
         ffmpeg_browse_btn = QPushButton("📁")
+        ffmpeg_browse_btn.setObjectName("Secondary")
         ffmpeg_browse_btn.setFixedWidth(40)
         ffmpeg_browse_btn.clicked.connect(self._choose_ffmpeg)
         grid.addWidget(ffmpeg_browse_btn, row, 2)
@@ -575,6 +452,7 @@ class SettingsDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         cancel_btn = QPushButton("Cancelar")
+        cancel_btn.setObjectName("Ghost")
         cancel_btn.clicked.connect(self.reject)
         save_btn = QPushButton("Salvar")
         save_btn.setObjectName("Primary")
@@ -593,8 +471,7 @@ class SettingsDialog(QDialog):
                 "⚠ ffmpeg não encontrado. Instale-o e adicione ao PATH, ou informe o caminho acima."
             )
             self.ffmpeg_status_label.setObjectName("StatusError")
-        self.style().unpolish(self.ffmpeg_status_label)
-        self.style().polish(self.ffmpeg_status_label)
+        repolish(self.ffmpeg_status_label)
 
     def _choose_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Escolher pasta de destino", self.folder_edit.text())
@@ -651,7 +528,7 @@ class MainWindow(QMainWindow):
         self._conv_list_items: dict[int, QListWidgetItem] = {}
         self._ffmpeg_warned = False
 
-        self.setWindowTitle("🎬 Video Downloader")
+        self.setWindowTitle("MasterApp")
         self.resize(900, 650)
         self.setMinimumSize(700, 500)
 
@@ -671,29 +548,75 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- top bar -----------------------------------------------------
-        top_bar = QFrame()
-        top_bar.setObjectName("TopBar")
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(16, 10, 16, 10)
-        title = QLabel("🎬 Video Downloader")
-        title.setObjectName("TitleLabel")
-        top_layout.addWidget(title)
-        top_layout.addStretch(1)
-        settings_btn = QPushButton("⚙ Configurações")
-        settings_btn.clicked.connect(self.open_settings)
-        top_layout.addWidget(settings_btn)
-        about_btn = QPushButton("?")
-        about_btn.setFixedWidth(36)
-        about_btn.clicked.connect(self.show_about)
-        top_layout.addWidget(about_btn)
-        root.addWidget(top_bar)
+        root.addWidget(self._build_header())
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_downloads_tab(), "⬇ Downloads")
         self.tabs.addTab(self._build_converter_tab(), "🔄 Converter Arquivos")
         self.tabs.addTab(DocumentosTab(self.settings), "📄 Documentos")
         root.addWidget(self.tabs, stretch=1)
+
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setObjectName("Header")
+        header.setFixedHeight(52)
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(20, 0, 16, 0)
+        layout.setSpacing(10)
+
+        logo = QLabel("🟥")
+        layout.addWidget(logo)
+        title = QLabel("MasterApp")
+        title.setObjectName("HeaderTitle")
+        layout.addWidget(title)
+        layout.addStretch(1)
+
+        self.theme_btn = QPushButton()
+        self.theme_btn.setObjectName("Ghost")
+        self.theme_btn.clicked.connect(self.toggle_theme)
+        layout.addWidget(self.theme_btn)
+
+        settings_btn = QPushButton("⚙ Config")
+        settings_btn.setObjectName("Secondary")
+        settings_btn.clicked.connect(self.open_settings)
+        layout.addWidget(settings_btn)
+
+        about_btn = QPushButton("?")
+        about_btn.setObjectName("Ghost")
+        about_btn.setFixedWidth(36)
+        about_btn.clicked.connect(self.show_about)
+        layout.addWidget(about_btn)
+
+        self._refresh_theme_button()
+        return header
+
+    def _build_queue_footer(self, start_text, on_start, on_pause, on_clear):
+        """Shared skeleton for the Downloads/Converter tabs' bottom control
+        row: a Primary start button, a Ghost pause button, a Ghost clear
+        button, and a status label pinned to the right. Returns the layout
+        plus the three widgets callers need to keep mutating."""
+        row = QHBoxLayout()
+        start_btn = QPushButton(start_text)
+        start_btn.setObjectName("Primary")
+        start_btn.clicked.connect(on_start)
+        row.addWidget(start_btn)
+
+        pause_btn = QPushButton("⏸ Pausar")
+        pause_btn.setObjectName("Ghost")
+        pause_btn.clicked.connect(on_pause)
+        row.addWidget(pause_btn)
+
+        clear_btn = QPushButton("🗑 Limpar concluídos")
+        clear_btn.setObjectName("Ghost")
+        clear_btn.clicked.connect(on_clear)
+        row.addWidget(clear_btn)
+
+        row.addStretch(1)
+        status_label = QLabel("")
+        status_label.setObjectName("Dim")
+        row.addWidget(status_label)
+
+        return row, pause_btn, status_label
 
     def _build_downloads_tab(self) -> QWidget:
         tab = QWidget()
@@ -705,7 +628,7 @@ class MainWindow(QMainWindow):
         input_row = QHBoxLayout()
         self.url_input = UrlInput(self.on_add_clicked)
         input_row.addWidget(self.url_input, stretch=1)
-        add_btn = QPushButton("Adicionar")
+        add_btn = QPushButton("▶ Adicionar")
         add_btn.setObjectName("Primary")
         add_btn.setFixedWidth(110)
         add_btn.clicked.connect(self.on_add_clicked)
@@ -731,13 +654,14 @@ class MainWindow(QMainWindow):
         self.folder_label.setObjectName("Dim")
         options_row.addWidget(self.folder_label, stretch=1)
         folder_btn = QPushButton("📁 Escolher")
+        folder_btn.setObjectName("Secondary")
         folder_btn.clicked.connect(self.choose_output_folder)
         options_row.addWidget(folder_btn)
         body.addLayout(options_row)
 
         # --- queue section ---------------------------------------------------
         queue_label = QLabel("FILA DE DOWNLOADS")
-        queue_label.setObjectName("Dim")
+        queue_label.setObjectName("SectionLabel")
         body.addWidget(queue_label)
 
         self.queue_list = QListWidget()
@@ -747,26 +671,10 @@ class MainWindow(QMainWindow):
         body.addWidget(self.queue_list, stretch=1)
 
         # --- bottom controls ---------------------------------------------------
-        bottom_row = QHBoxLayout()
-        self.start_btn = QPushButton("▶ Iniciar tudo")
-        self.start_btn.setObjectName("Primary")
-        self.start_btn.clicked.connect(self.on_start_all)
-        bottom_row.addWidget(self.start_btn)
-
-        self.pause_btn = QPushButton("⏸ Pausar")
-        self.pause_btn.clicked.connect(self.on_pause)
-        bottom_row.addWidget(self.pause_btn)
-
-        clear_btn = QPushButton("🗑 Limpar concluídos")
-        clear_btn.clicked.connect(self.manager.clear_completed)
-        bottom_row.addWidget(clear_btn)
-
-        bottom_row.addStretch(1)
-        self.status_bar_label = QLabel("")
-        self.status_bar_label.setObjectName("Dim")
-        bottom_row.addWidget(self.status_bar_label)
-
-        body.addLayout(bottom_row)
+        footer, self.pause_btn, self.status_bar_label = self._build_queue_footer(
+            "▶ Iniciar tudo", self.on_start_all, self.on_pause, self.manager.clear_completed,
+        )
+        body.addLayout(footer)
         return tab
 
     def _build_converter_tab(self) -> QWidget:
@@ -797,13 +705,14 @@ class MainWindow(QMainWindow):
         self.conv_folder_label.setObjectName("Dim")
         folder_row.addWidget(self.conv_folder_label, stretch=1)
         conv_folder_btn = QPushButton("📁 Escolher")
+        conv_folder_btn.setObjectName("Secondary")
         conv_folder_btn.clicked.connect(self.choose_output_folder)
         folder_row.addWidget(conv_folder_btn)
         body.addLayout(folder_row)
 
         # --- queue section -----------------------------------------------------
         queue_label = QLabel("ARQUIVOS PARA CONVERTER")
-        queue_label.setObjectName("Dim")
+        queue_label.setObjectName("SectionLabel")
         body.addWidget(queue_label)
 
         self.conv_queue_list = QListWidget()
@@ -813,26 +722,11 @@ class MainWindow(QMainWindow):
         body.addWidget(self.conv_queue_list, stretch=1)
 
         # --- bottom controls -----------------------------------------------------
-        bottom_row = QHBoxLayout()
-        self.conv_start_btn = QPushButton("▶ Converter tudo")
-        self.conv_start_btn.setObjectName("Primary")
-        self.conv_start_btn.clicked.connect(self.on_start_all_conversions)
-        bottom_row.addWidget(self.conv_start_btn)
-
-        self.conv_pause_btn = QPushButton("⏸ Pausar")
-        self.conv_pause_btn.clicked.connect(self.on_pause_conversions)
-        bottom_row.addWidget(self.conv_pause_btn)
-
-        conv_clear_btn = QPushButton("🗑 Limpar concluídos")
-        conv_clear_btn.clicked.connect(self.conversion_manager.clear_completed)
-        bottom_row.addWidget(conv_clear_btn)
-
-        bottom_row.addStretch(1)
-        self.conv_status_label = QLabel("")
-        self.conv_status_label.setObjectName("Dim")
-        bottom_row.addWidget(self.conv_status_label)
-
-        body.addLayout(bottom_row)
+        footer, self.conv_pause_btn, self.conv_status_label = self._build_queue_footer(
+            "▶ Converter tudo", self.on_start_all_conversions, self.on_pause_conversions,
+            self.conversion_manager.clear_completed,
+        )
+        body.addLayout(footer)
         return tab
 
     def _connect_manager_signals(self):
@@ -1028,12 +922,13 @@ class MainWindow(QMainWindow):
             self.conv_folder_label.setText(self.settings.output_dir)
             if self.settings.theme != old_theme:
                 self.apply_theme(self.settings.theme)
+                self._refresh_theme_button()
 
     def show_about(self):
         QMessageBox.information(
             self,
             "Sobre",
-            "Video Downloader\n\n"
+            "MasterApp\n\n"
             "Baixe vídeos do YouTube, Instagram, Twitter/X, TikTok e mais, "
             "usando yt-dlp.\n\n"
             "Cole um link, escolha a qualidade e clique em Adicionar. "
@@ -1049,9 +944,21 @@ class MainWindow(QMainWindow):
             self._on_ffmpeg_missing()
 
     # ------------------------------------------------------------------
-    def apply_theme(self, theme: str):
-        app = QApplication.instance()
-        app.setStyleSheet(build_stylesheet(theme))
+    # Theme
+    # ------------------------------------------------------------------
+
+    def toggle_theme(self):
+        self.settings.theme = "light" if self.settings.theme == "dark" else "dark"
+        save_settings(self.settings)
+        self.apply_theme(self.settings.theme)
+        self._refresh_theme_button()
+
+    def _refresh_theme_button(self):
+        # Label shows the icon/word for what clicking will switch TO.
+        self.theme_btn.setText("☀ Claro" if self.settings.theme == "dark" else "🌙 Escuro")
+
+    def apply_theme(self, theme_name: str):
+        set_app_theme(QApplication.instance(), theme_name)
 
     def closeEvent(self, event):
         self.manager.shutdown()

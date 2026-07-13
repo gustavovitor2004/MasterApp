@@ -1,72 +1,50 @@
-# 🎬 Video Downloader
+# 🟥 MasterApp
 
 Aplicativo pessoal de desktop para baixar vídeos do YouTube, Instagram,
 Twitter/X, TikTok, Reddit, Facebook e qualquer outra plataforma suportada
 pelo [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), com seleção de qualidade
-até 4K.
+até 4K — além de conversão de mídia local e uma aba de OCR/conversão de
+documentos.
 
 ## Requisitos
 
 - Windows 10/11
 - Python 3.10 ou superior
 - [ffmpeg](https://ffmpeg.org/download.html) instalado no sistema (necessário
-  para mesclar vídeo+áudio em qualidades acima de 360p e para extrair áudio
-  em MP3)
+  para mesclar vídeo+áudio em qualidades acima de 360p, extrair áudio em
+  MP3 e para a aba de conversão de mídia local)
 - Para a aba **📄 Documentos** (OCR e conversão de documentos): Tesseract
   OCR e, opcionalmente, Poppler e Microsoft Word/LibreOffice — veja a seção
   [Aba "Documentos"](#aba-documentos-ocr-e-conversão-de-documentos) mais
   abaixo. O restante do app funciona normalmente mesmo sem eles.
-
-### Instalando o ffmpeg no Windows
-
-1. Baixe o build "essentials" em https://www.gyan.dev/ffmpeg/builds/ (ou via
-   `winget install ffmpeg` / `choco install ffmpeg`).
-2. Extraia o `.zip` e adicione a pasta `bin` ao `PATH` do Windows.
-3. Confirme rodando `ffmpeg -version` em um terminal novo.
-
-Se preferir não mexer no `PATH`, informe o caminho completo do executável em
-**Configurações → Caminho customizado do ffmpeg** dentro do próprio app.
 
 ## Instalação rápida (recomendado para enviar a outra pessoa)
 
 Se você recebeu esta pasta de alguém (ou vai repassá-la), não precisa mexer
 em terminal:
 
-1. Dê **duplo clique em `instalar.bat`**. Ele detecta o que já está
-   instalado e instala automaticamente o que faltar via `winget` (recurso
-   nativo do Windows 10/11): Python, ffmpeg, Tesseract OCR e Poppler — além
-   de instalar todas as bibliotecas Python do projeto.
-   - Se o Python precisar ser instalado do zero, o script vai pedir para
-     você rodar `instalar.bat` **uma segunda vez** depois (o Windows precisa
-     atualizar o PATH primeiro).
-   - Se ffmpeg ou Poppler forem instalados nessa execução, **reinicie o
-     computador** (ou pelo menos saia e entre de novo na sua conta) antes
-     de usar o app — o script avisa isso na tela final quando necessário.
-   - DOCX → PDF continua precisando do Microsoft Word ou do
-     [LibreOffice](https://www.libreoffice.org/download) instalado à parte
-     — não é baixado automaticamente por ser um instalador grande.
-2. Depois de terminar, dê **duplo clique em `iniciar.bat`** sempre que quiser
-   abrir o programa.
+1. Dê **duplo clique em `scripts\instalar.bat`**. Ele verifica se Python
+   3.10+ está instalado (abrindo a página de download se não estiver),
+   instala/atualiza o `pip` e todas as bibliotecas do `requirements.txt`, e
+   avisa (com link de download) se `ffmpeg` ou `tesseract` não estiverem no
+   `PATH` do sistema.
+2. Depois de terminar, dê **duplo clique em `scripts\iniciar.bat`** sempre
+   que quiser abrir o programa.
 
-Envie a pasta inteira (todos os arquivos `.py` + a pasta `documentos/` +
-`instalar.bat` + `iniciar.bat` + `requirements.txt`) compactada em `.zip`
-para a outra pessoa — não é necessário ter Git nem nenhuma ferramenta extra
-instalada previamente.
+Envie a pasta inteira (`src/`, `scripts/`, `requirements.txt`, `README.md`)
+compactada em `.zip` para a outra pessoa — não é necessário ter Git nem
+nenhuma ferramenta extra instalada previamente.
 
-### "winget indisponível" mesmo com o winget instalado
+### Instalando o ffmpeg/tesseract manualmente
 
-Se `instalar.bat` mostrar "AVISO: winget indisponível" mas você sabe que o
-winget funciona no seu PC (abra um terminal novo e rode `winget --version`
-para confirmar), a causa provável é o **Explorer do Windows** estar rodando
-há muito tempo com uma cópia desatualizada do `PATH` em memória — qualquer
-`.bat` aberto por duplo clique herda esse `PATH` velho, mesmo que o winget
-já esteja instalado e funcionando em terminais abertos depois disso.
-Soluções, da mais rápida para a mais garantida:
-
-1. Reinicie o Explorer: Gerenciador de Tarefas → aba Processos → "Explorador
-   de Arquivos" → Reiniciar.
-2. Ou simplesmente reinicie o computador.
-3. Depois, rode `instalar.bat` de novo.
+- **ffmpeg**: baixe o build "essentials" em
+  https://www.gyan.dev/ffmpeg/builds/ (ou `winget install ffmpeg`), extraia
+  o `.zip` e adicione a pasta `bin` ao `PATH` do Windows. Confirme com
+  `ffmpeg -version` em um terminal novo. Se preferir não mexer no `PATH`,
+  informe o caminho completo do executável em **Configurações → Caminho
+  customizado do ffmpeg** dentro do próprio app.
+- **tesseract**: veja a seção [Aba "Documentos"](#aba-documentos-ocr-e-conversão-de-documentos)
+  mais abaixo.
 
 ## Instalação manual (via terminal)
 
@@ -77,12 +55,15 @@ pip install -r requirements.txt
 ## Executando
 
 ```bash
-python main.py
+python src/main.py
 ```
 
-O app funciona a partir de qualquer diretório de trabalho — ele resolve seus
-próprios caminhos (config, pasta de downloads) relativos à localização dos
-arquivos `.py` e à pasta pessoal do usuário, nunca `Program Files`.
+Ou, no Windows, dê duplo clique em `scripts\iniciar.bat`. O app funciona a
+partir de qualquer diretório de trabalho — ele resolve seus próprios
+caminhos (config, pasta de downloads) relativos à localização do próprio
+projeto e à pasta pessoal do usuário, nunca `Program Files`. O
+`config.json` fica sempre na raiz do projeto (fora de `src/`), então
+sobrevive a futuras atualizações do código.
 
 ## Como usar
 
@@ -90,7 +71,7 @@ arquivos `.py` e à pasta pessoal do usuário, nunca `Program Files`.
    linha, para adicionar todos de uma vez).
 2. Escolha a qualidade desejada no dropdown (`4K`, `1080p`, `720p`, `480p`,
    `360p`, `Melhor qualidade disponível` ou `Apenas áudio (MP3)`).
-3. Clique em **Adicionar** — o vídeo entra na fila e o app busca título e
+3. Clique em **▶ Adicionar** — o vídeo entra na fila e o app busca título e
    thumbnail em segundo plano.
 4. Clique em **▶ Iniciar tudo** para começar a baixar a fila.
 5. Acompanhe progresso, velocidade e ETA de cada item em tempo real.
@@ -134,13 +115,20 @@ já exigido pelo restante do app.
 Ao selecionar uma qualidade (ex: `1080p Full HD`), o app pede ao `yt-dlp` os
 melhores streams de vídeo e áudio disponíveis **até** aquele limite de
 altura. Se a plataforma não oferecer essa qualidade para o vídeo em questão,
-o `yt-dlp` cai automaticamance para a melhor qualidade disponível abaixo
+o `yt-dlp` cai automaticamente para a melhor qualidade disponível abaixo
 disso. Depois que o download termina, o app mostra, ao lado do título, a
 qualidade **realmente** baixada (que pode ser menor do que a selecionada).
 
+### Tema claro/escuro
+
+O ícone ☀/🌙 no canto superior direito do cabeçalho alterna entre os temas
+escuro (padrão) e claro instantaneamente, sem precisar reiniciar o app. A
+preferência é salva em `config.json` e usada automaticamente na próxima
+abertura. O mesmo tema também pode ser escolhido na tela de Configurações.
+
 ### Configurações
 
-Acessível pelo botão **⚙ Configurações** no topo da janela:
+Acessível pelo botão **⚙ Config** no cabeçalho:
 
 - Pasta de destino (padrão: `~/Videos/Downloads`)
 - Qualidade padrão usada ao adicionar novos links
@@ -151,8 +139,7 @@ Acessível pelo botão **⚙ Configurações** no topo da janela:
 - Salvar metadados do vídeo (`.info.json`)
 - Caminho customizado do ffmpeg (caso não esteja no `PATH`)
 
-Tudo é salvo automaticamente em `config.json`, na mesma pasta dos arquivos
-`.py`.
+Tudo é salvo automaticamente em `config.json`, na raiz do projeto.
 
 ## Aba "📄 Documentos" (OCR e conversão de documentos)
 
@@ -179,14 +166,18 @@ isso ainda).
 
 ### 🔄 Converter Formato
 
-1. Clique em **+ Adicionar arquivos** (ou arquivos de formatos diferentes,
-   desde que compartilhem pelo menos um formato de destino em comum).
+1. Clique em **+ Adicionar arquivos** (podem ser de formatos diferentes,
+   desde que compartilhem pelo menos um formato de destino em comum — "PDF"
+   está sempre disponível como destino).
 2. Escolha o formato de destino no dropdown — as opções mudam de acordo com
-   o(s) arquivo(s) selecionado(s).
+   o(s) arquivo(s) selecionado(s). Arquivos que não suportam o destino
+   escolhido ficam marcados "Não suportado" e são pulados automaticamente.
 3. Escolha a pasta de saída e clique em **▶ Converter**.
 4. Cada arquivo mostra seu status (`Aguardando`, `Convertendo...`,
    `Concluído ✓`, `Erro ✗`) e o rodapé mostra o progresso geral
-   ("2 de 3 arquivos convertidos").
+   ("2 de 3 arquivos convertidos"). Use o **[✕]** de cada linha para
+   remover um arquivo específico da fila, ou **🗑 Remover todos** para
+   limpar tudo de uma vez.
 5. Ao terminar, use **📂 Abrir pasta de saída** para ver o resultado no
    Explorer.
 
@@ -196,17 +187,18 @@ Conversões suportadas:
 |---|---|
 | JPG / PNG / BMP / WEBP / TIFF | PDF, ou qualquer outro formato de imagem da lista |
 | PDF | JPG, PNG (uma imagem por página), DOCX, TXT |
-| DOCX | PDF |
-| Várias imagens | Um único PDF mesclado (marque a caixa "Mesclar..." quando aparecer) |
+| DOCX | PDF, TXT |
+| TXT | PDF, DOCX |
+| Qualquer mistura dos formatos acima | Um único PDF mesclado (marque "Mesclar tudo em um único PDF" quando o destino for PDF) — arraste as linhas para reordenar as páginas antes de converter, e PDFs protegidos por senha são suportados (o app pede a senha de cada um) |
 
 Saída padrão: `~/Documents/Convertidos`.
 
 ### Dependências extras desta aba
 
-O `instalar.bat` já instala Tesseract e Poppler automaticamente (veja
-[Instalação rápida](#instalação-rápida-recomendado-para-enviar-a-outra-pessoa)
-acima). As instruções abaixo são só para quem prefere instalar manualmente.
-Além do `ffmpeg` já usado pelo resto do app, a aba Documentos precisa de:
+O `scripts\instalar.bat` verifica `tesseract` no PATH (veja acima). As
+instruções abaixo são para quem prefere instalar manualmente, ou precisa de
+Poppler/LibreOffice (não checados pelo instalador). Além do `ffmpeg` já
+usado pelo resto do app, a aba Documentos precisa de:
 
 - **Tesseract OCR** (motor de reconhecimento de texto):
   - Windows: baixe o instalador em
@@ -219,7 +211,7 @@ Além do `ffmpeg` já usado pelo resto do app, a aba Documentos precisa de:
   - Se não for encontrado, o app mostra um aviso claro assim que a aba
     Documentos é aberta, explicando como instalar.
 - **Poppler** (necessário só para operações com PDF: digitalizar PDF,
-  converter PDF → imagem):
+  converter PDF → imagem, mesclar PDF):
   - Windows: baixe em
     https://github.com/oschwartz10612/poppler-windows/releases, extraia o
     `.zip` e adicione a pasta `Library\bin` ao `PATH` do Windows.
@@ -233,23 +225,26 @@ Além do `ffmpeg` já usado pelo resto do app, a aba Documentos precisa de:
 ## Estrutura de arquivos
 
 ```
-/video-downloader
-├── main.py         # Ponto de entrada — inicia a interface gráfica
-├── downloader.py   # Wrapper do yt-dlp, fila de downloads e threading
-├── converter.py    # Conversor de mídia local via ffmpeg, fila e threading
-├── ui.py           # Componentes de interface (PySide6)
-├── settings.py     # Carregar/salvar config.json
-├── utils.py        # Validação de URL, detecção de plataforma, helpers
-├── documentos/     # Aba "Documentos": OCR e conversão de documentos
-│   ├── __init__.py
-│   ├── ocr_engine.py     # pytesseract / pdf2image + exportar .txt/.docx/.pdf
-│   ├── converter.py      # Conversão de imagem/PDF/DOCX (Pillow, reportlab,
-│   │                     # pdf2image, pdf2docx, pdfplumber, docx2pdf)
-│   ├── workers.py        # QThread workers de OCR e conversão
-│   └── tab_documentos.py # Widget da aba (sub-abas Digitalizar/Converter)
-├── config.json     # Criado automaticamente na primeira execução
-├── instalar.bat    # Instala Python/ffmpeg/dependências automaticamente
-├── iniciar.bat     # Abre o programa (duplo clique)
+/MasterApp
+├── src/                      # todo o código-fonte Python
+│   ├── main.py               # Ponto de entrada — inicia a interface gráfica
+│   ├── ui.py                 # Componentes de interface (PySide6)
+│   ├── theme.py              # Sistema de tema centralizado (dark/light, apply_theme)
+│   ├── downloader.py         # Wrapper do yt-dlp, fila de downloads e threading
+│   ├── converter.py          # Conversor de mídia local via ffmpeg, fila e threading
+│   ├── settings.py           # Carregar/salvar config.json (na raiz do projeto)
+│   ├── utils.py              # Validação de URL, detecção de plataforma, helpers
+│   └── documentos/           # Aba "Documentos": OCR e conversão de documentos
+│       ├── __init__.py
+│       ├── ocr_engine.py     # pytesseract / pdf2image + exportar .txt/.docx/.pdf
+│       ├── converter.py      # Conversão de imagem/PDF/DOCX/TXT (Pillow, reportlab,
+│       │                     # pdf2image, pdf2docx, pdfplumber, docx2pdf, pypdf)
+│       ├── workers.py        # QThread workers de OCR e conversão
+│       └── tab_documentos.py # Widget da aba (sub-abas Digitalizar/Converter)
+├── scripts/                  # scripts executáveis, separados do código-fonte
+│   ├── instalar.bat          # Verifica Python/pip, instala dependências, checa ffmpeg/tesseract
+│   └── iniciar.bat           # Abre o programa (duplo clique)
+├── config.json                # Criado automaticamente na primeira execução
 ├── requirements.txt
 └── README.md
 ```
@@ -260,6 +255,11 @@ Além do `ffmpeg` já usado pelo resto do app, a aba Documentos precisa de:
   na thread da interface — cada item baixa em sua própria `threading.Thread`,
   e o progresso é reportado de volta à interface via sinais Qt
   (thread-safe por padrão).
+- **Tema**: centralizado em `theme.py` — uma única `apply_theme()` aplica o
+  stylesheet inteiro da aplicação; nenhum widget define estilo inline para
+  fins de tema. Linhas de fila (downloads/conversões) mudam a cor da borda
+  esquerda dinamicamente via uma propriedade Qt (`status`), não por CSS
+  fixo, então o mesmo código funciona em ambos os temas automaticamente.
 - **Engine**: `yt-dlp` é usado via API Python (não subprocess), o que
   permite hooks de progresso em tempo real, seleção fina de formato e
   pós-processamento (merge/conversão) integrados.

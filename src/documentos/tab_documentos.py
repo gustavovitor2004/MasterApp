@@ -2,12 +2,13 @@
 documentos/tab_documentos.py
 
 The "Documentos" tab widget: registers two sub-tabs, "Digitalizar" (OCR)
-and "Converter Formato" (local document conversion). Deliberately reuses
-the same visual patterns already established in ui.py - QFrame#Card,
-QPushButton#Primary/#Danger, QLabel#Dim/#ErrorLabel/#StatusDone/#StatusError
-- so it inherits the app's theme (dark/light) automatically through the
-same app-wide stylesheet MainWindow.apply_theme() already sets, with no
-Documentos-specific styling needed.
+and "Converter Formato" (local document conversion). Reuses the same
+visual system established in ui.py/theme.py - QFrame#Card (with the
+dynamic "status" property that colors its left border), the four
+QPushButton variants (#Primary/#Secondary/#Ghost/#Danger), and
+QLabel#Dim/#ErrorLabel/#StatusDone/#StatusError - so it inherits the app's
+theme (dark/light) automatically through the single app-wide stylesheet
+theme.apply_theme() sets, with no Documentos-specific styling needed.
 """
 
 import itertools
@@ -27,6 +28,7 @@ from documentos import ocr_engine
 from documentos import converter as doc_converter
 from documentos.workers import OcrWorker, ConversionWorker
 from settings import save_settings
+from theme import repolish
 from utils import format_size
 
 PREVIEW_SIZE = QSize(270, 280)
@@ -62,6 +64,7 @@ class OcrSubTab(QWidget):
         left_layout.addWidget(self.preview_label)
 
         self.select_btn = QPushButton("📂 Selecionar Arquivo")
+        self.select_btn.setObjectName("Secondary")
         self.select_btn.clicked.connect(self.on_select_file)
         left_layout.addWidget(self.select_btn)
 
@@ -106,21 +109,25 @@ class OcrSubTab(QWidget):
 
         buttons_row = QHBoxLayout()
         self.copy_btn = QPushButton("📋 Copiar Texto")
+        self.copy_btn.setObjectName("Secondary")
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self.on_copy_text)
         buttons_row.addWidget(self.copy_btn)
 
         self.save_txt_btn = QPushButton("💾 Salvar como .TXT")
+        self.save_txt_btn.setObjectName("Secondary")
         self.save_txt_btn.setEnabled(False)
         self.save_txt_btn.clicked.connect(lambda: self.on_save_as("txt"))
         buttons_row.addWidget(self.save_txt_btn)
 
         self.save_docx_btn = QPushButton("💾 Salvar como .DOCX")
+        self.save_docx_btn.setObjectName("Secondary")
         self.save_docx_btn.setEnabled(False)
         self.save_docx_btn.clicked.connect(lambda: self.on_save_as("docx"))
         buttons_row.addWidget(self.save_docx_btn)
 
         self.save_pdf_btn = QPushButton("💾 Salvar como .PDF")
+        self.save_pdf_btn.setObjectName("Secondary")
         self.save_pdf_btn.setEnabled(False)
         self.save_pdf_btn.clicked.connect(lambda: self.on_save_as("pdf"))
         buttons_row.addWidget(self.save_pdf_btn)
@@ -291,15 +298,24 @@ class DocConversionItemWidget(QFrame):
     STATUS_CONVERTING = "converting"
     STATUS_DONE = "done"
     STATUS_ERROR = "error"
-    STATUS_UNSUPPORTED = "unsupported"  # [NOVO]
+    STATUS_UNSUPPORTED = "unsupported"
 
-    # status_kind -> (display text, QSS objectName to apply to status_label)
+    # status_kind -> (display text, QSS objectName for the status label)
     _STATUS_DISPLAY = {
         STATUS_WAITING: ("Aguardando", ""),
         STATUS_CONVERTING: ("Convertendo...", ""),
         STATUS_DONE: ("Concluído ✓", "StatusDone"),
         STATUS_ERROR: ("Erro ✗", "StatusError"),
-        STATUS_UNSUPPORTED: ("Não suportado", "Dim"),  # [NOVO] cinza, igual ao resto do tema
+        STATUS_UNSUPPORTED: ("Não suportado", "Dim"),
+    }
+
+    # status_kind -> Card left-border color bucket (see theme.py)
+    _CARD_STATUS = {
+        STATUS_WAITING: "waiting",
+        STATUS_CONVERTING: "active",
+        STATUS_DONE: "done",
+        STATUS_ERROR: "error",
+        STATUS_UNSUPPORTED: "waiting",
     }
 
     def __init__(self, on_delete=None, parent=None):
@@ -309,8 +325,8 @@ class DocConversionItemWidget(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
 
-        # [NOVO] alça de arrastar (⠿), visível só quando o modo de
-        # mesclagem está ativo - permite reordenar as páginas do PDF final.
+        # Drag handle (⠿), visible only when merge mode is active - lets
+        # the user reorder the pages of the final merged PDF.
         self.handle_label = QLabel("⠿")
         self.handle_label.setObjectName("Dim")
         self.handle_label.setFixedWidth(18)
@@ -335,8 +351,8 @@ class DocConversionItemWidget(QFrame):
         self.status_label.setFixedWidth(160)
         layout.addWidget(self.status_label)
 
-        # [NOVO] botão deletar por linha - compacto, reaproveita o estilo
-        # #Danger (vermelho/hover) já usado em outras partes do app.
+        # Compact per-row delete button - reuses the #Danger variant (red,
+        # transparent until hover) shared with the rest of the app.
         self.delete_btn = QPushButton("✕")
         self.delete_btn.setObjectName("Danger")
         self.delete_btn.setFixedWidth(28)
@@ -361,13 +377,13 @@ class DocConversionItemWidget(QFrame):
             text = f"{text} — {detail[:60]}"
         self.status_label.setText(text)
         self.status_label.setObjectName(qss_kind)
-        self.style().unpolish(self.status_label)
-        self.style().polish(self.status_label)
-        # [NOVO] nunca deletável enquanto está ativamente convertendo
+        repolish(self.status_label)
+        self.setProperty("status", self._CARD_STATUS.get(status_kind, "waiting"))
+        repolish(self)
+        # Never deletable while actively converting.
         self.delete_btn.setEnabled(status_kind != self.STATUS_CONVERTING)
 
     def set_merge_mode(self, active: bool):
-        # [NOVO]
         self.handle_label.setVisible(active)
 
 
@@ -378,13 +394,13 @@ class ConvertSubTab(QWidget):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
-        self.jobs = []              # [NOVO] lista de {"id": int, "path": str}, na ordem de exibição
-        self._item_widgets = {}     # [NOVO] job id -> DocConversionItemWidget (não mais por índice)
+        self.jobs = []              # list of {"id": int, "path": str}, in display order
+        self._item_widgets = {}     # job id -> DocConversionItemWidget
         self._next_job_id = itertools.count(1)
         self._completed = 0
         self._merge_active = False
         self._converting = False
-        self._skip_ids = set()      # [NOVO] ids removidos da lista durante uma conversão ativa
+        self._skip_ids = set()      # ids removed from the list during an active run
         self.worker = None
 
         layout = QVBoxLayout(self)
@@ -397,8 +413,8 @@ class ConvertSubTab(QWidget):
         self.add_btn.clicked.connect(self.on_add_files)
         top_row.addWidget(self.add_btn)
 
-        # [NOVO] "Remover todos"
         self.remove_all_btn = QPushButton("🗑 Remover todos")
+        self.remove_all_btn.setObjectName("Secondary")
         self.remove_all_btn.clicked.connect(self.on_remove_all)
         top_row.addWidget(self.remove_all_btn)
 
@@ -422,13 +438,13 @@ class ConvertSubTab(QWidget):
         self.folder_label.setObjectName("Dim")
         folder_row.addWidget(self.folder_label, stretch=1)
         folder_btn = QPushButton("📁 Escolher")
+        folder_btn.setObjectName("Secondary")
         folder_btn.clicked.connect(self.on_choose_folder)
         folder_row.addWidget(folder_btn)
         layout.addLayout(folder_row)
 
-        # [CORRIGIDO] "Mesclar tudo em um único PDF" - antes só aparecia se
-        # a lista fosse só de imagens com mais de 1 arquivo; agora aparece
-        # sempre que o destino é PDF, para qualquer mistura de formatos.
+        # "Mesclar tudo em um único PDF" - appears whenever the destination
+        # is PDF, for any mix of supported formats (not just images).
         self.merge_checkbox = QCheckBox("Mesclar tudo em um único PDF")
         self.merge_checkbox.setVisible(False)
         self.merge_checkbox.toggled.connect(self._on_merge_toggled)
@@ -444,7 +460,7 @@ class ConvertSubTab(QWidget):
         self.file_list.setSelectionMode(QListWidget.NoSelection)
         self.file_list.setFocusPolicy(Qt.NoFocus)
         self.file_list.setDragDropMode(QListWidget.NoDragDrop)
-        # [NOVO] reordenação por arrastar-e-soltar (só habilitada em modo mesclagem)
+        # Drag-and-drop reordering is only enabled in merge mode.
         self.file_list.model().rowsMoved.connect(self._on_rows_moved)
         layout.addWidget(self.file_list, stretch=1)
 
@@ -458,6 +474,7 @@ class ConvertSubTab(QWidget):
         layout.addLayout(bottom_row)
 
         self.open_folder_btn = QPushButton("📂 Abrir pasta de saída")
+        self.open_folder_btn.setObjectName("Secondary")
         self.open_folder_btn.setEnabled(False)
         self.open_folder_btn.clicked.connect(self.on_open_folder)
         layout.addWidget(self.open_folder_btn)
@@ -489,9 +506,8 @@ class ConvertSubTab(QWidget):
         self._refresh_progress_display()
 
     def _add_job(self, path):
-        # [NOVO] cada linha tem um id estável (não é mais indexada por
-        # posição na lista), então deletar/reordenar nunca embaralha o
-        # rastreamento de progresso de outras linhas.
+        # Each row has a stable id (not indexed by list position), so
+        # deleting/reordering never desyncs progress tracking for other rows.
         job_id = next(self._next_job_id)
         self.jobs.append({"id": job_id, "path": path})
 
@@ -508,7 +524,6 @@ class ConvertSubTab(QWidget):
         return job_id
 
     def on_remove_all(self):
-        # [NOVO]
         if self._converting:
             return
         self.jobs = []
@@ -518,14 +533,13 @@ class ConvertSubTab(QWidget):
         self._refresh_progress_display()
 
     def _on_delete_clicked(self, job_id):
-        # [NOVO]
         widget = self._item_widgets.get(job_id)
         if widget is None:
             return
         if widget.status_kind == DocConversionItemWidget.STATUS_CONVERTING:
-            return  # defensivo - o botão já fica desabilitado nesse estado
+            return  # defensive - the button is already disabled in this state
         if self._converting:
-            # Arquivo ainda não alcançado pelo worker: avisa para pular.
+            # File not yet reached by the worker: flag it to be skipped.
             self._skip_ids.add(job_id)
         self._remove_job_row(job_id)
         if not self._converting:
@@ -542,7 +556,7 @@ class ConvertSubTab(QWidget):
                 break
 
     def _on_rows_moved(self, *_args):
-        # [NOVO] resincroniza a ordem de self.jobs após um arrastar-e-soltar
+        # Resyncs self.jobs' order after a drag-and-drop reorder.
         by_id = {job["id"]: job for job in self.jobs}
         ordered_ids = [self.file_list.item(row).data(Qt.UserRole) for row in range(self.file_list.count())]
         self.jobs = [by_id[jid] for jid in ordered_ids if jid in by_id]
@@ -559,30 +573,26 @@ class ConvertSubTab(QWidget):
             self._on_target_or_jobs_changed()
             return
 
-        # [CORRIGIDO] lógica de bloqueio de formato removida: antes era uma
-        # INTERSEÇÃO dos formatos válidos de cada arquivo, o que fazia
-        # "PDF" desaparecer do dropdown assim que qualquer PDF entrava na
-        # lista (PDF não é seu próprio alvo, então a interseção zerava esse
-        # formato). Agora é uma UNIÃO: o dropdown mostra qualquer formato
-        # válido para PELO MENOS UM arquivo da lista. Arquivos que não
-        # suportam o destino escolhido ficam "Não suportado" e são pulados
-        # automaticamente na conversão, sem travar os demais.
+        # The dropdown shows any format valid for AT LEAST ONE file in the
+        # list (a union, not an intersection). Files that don't support the
+        # chosen target are marked "Não suportado" and skipped automatically
+        # during conversion instead of blocking the whole batch.
         union = set()
         for job in self.jobs:
             ext, _ = doc_converter.detect_format(job["path"])
             union |= set(doc_converter.available_targets(ext))
 
-        # [NOVO] "PDF" é sempre uma opção de destino válida, mesmo quando a
-        # lista inteira já é só de PDFs (nesse caso a união acima não
-        # incluiria "pdf", já que um PDF não lista a si mesmo como alvo).
-        # Isso também é o que faz a caixa "Mesclar tudo em um único PDF"
-        # aparecer nesse cenário, já que ela só é mostrada quando o destino
-        # selecionado é PDF.
+        # "PDF" is always a valid destination, even when the whole list is
+        # already PDFs (a same-format list wouldn't otherwise contribute
+        # "pdf" to the union above, since a PDF never lists itself as a
+        # target) - this is also what makes "Mesclar tudo em um único PDF"
+        # available in that scenario, since it's only shown when the
+        # selected target is PDF.
         union.add("pdf")
         options = sorted(union)
         if "pdf" in options:
-            # [NOVO] PDF tem prioridade: sempre a primeira opção da lista e,
-            # por consequência, a selecionada por padrão ao adicionar arquivos.
+            # PDF gets priority: always the first option, and therefore the
+            # one selected by default when files are first added.
             options.remove("pdf")
             options.insert(0, "pdf")
 
@@ -610,19 +620,18 @@ class ConvertSubTab(QWidget):
         self._update_supported_status()
 
     def _update_merge_visibility(self):
-        # [CORRIGIDO] antes exigia lista só-de-imagens com mais de 1
-        # arquivo; agora a mesclagem aceita qualquer mistura de formatos
-        # suportados, então só depende do destino escolhido ser PDF.
+        # Merging accepts any mix of supported formats, so it only depends
+        # on the chosen target being PDF.
         target_is_pdf = self.target_combo.currentText().upper() == "PDF"
         self.merge_checkbox.setVisible(target_is_pdf)
         if not target_is_pdf:
             self.merge_checkbox.setChecked(False)
 
     def _update_supported_status(self):
-        # [NOVO] marca "Não suportado" nas linhas cujo arquivo não pode
-        # alcançar o formato de destino atualmente selecionado.
+        # Marks "Não suportado" on rows whose file can't reach the
+        # currently selected target format.
         if self._converting:
-            return  # não mexe nos status durante uma conversão em andamento
+            return  # don't touch statuses while a run is in progress
         target_ext = self.target_combo.currentText().lower()
         if not target_ext:
             return
@@ -637,7 +646,7 @@ class ConvertSubTab(QWidget):
                 widget.set_status(DocConversionItemWidget.STATUS_UNSUPPORTED)
 
     def _on_merge_toggled(self, checked):
-        # [NOVO] arrastar-e-soltar só fica ativo em modo mesclagem
+        # Drag-and-drop reordering is only active in merge mode.
         self.file_list.setDragDropMode(QListWidget.InternalMove if checked else QListWidget.NoDragDrop)
         for widget in self._item_widgets.values():
             widget.set_merge_mode(checked)
@@ -664,17 +673,14 @@ class ConvertSubTab(QWidget):
 
         self._merge_active = self.merge_checkbox.isVisible() and self.merge_checkbox.isChecked()
 
-        # [CORRIGIDO] antes, cada PDF da lista era aberto com PdfReader()
-        # AQUI, na thread da GUI, só para checar se tinha senha - isso
-        # travava a janela inteira ("Não está respondendo") sempre que um
-        # PDF real (grande, ou com estrutura fora do padrão) demorava para
-        # ser lido. Agora a checagem de senha acontece dentro do worker em
-        # segundo plano (ver _on_password_requested), e só o diálogo em si
-        # roda na GUI - a leitura pesada do PDF nunca bloqueia a janela.
+        # Password checks for encrypted PDFs happen inside the background
+        # worker (see _on_password_requested) - not here, since opening a
+        # real-world PDF to check its encryption status can take a while
+        # for large/unusual files, and doing that on the GUI thread would
+        # freeze the window.
 
         output_name = None
         if self._merge_active:
-            # [NOVO] pede o nome do arquivo final mesclado
             name, ok = QInputDialog.getText(
                 self, "Nome do arquivo mesclado", "Salvar PDF mesclado como:",
                 text="documento_mesclado.pdf",
@@ -695,9 +701,9 @@ class ConvertSubTab(QWidget):
         self.open_folder_btn.setEnabled(False)
 
         if self._merge_active:
-            # Toda a lista fica travada durante a mesclagem (é uma operação
-            # atômica sobre a lista inteira, não por arquivo) - o próprio
-            # set_status(CONVERTING) já desabilita o botão de deletar.
+            # The whole list locks during merging (it's one atomic
+            # operation over the entire list, not per-file) - set_status
+            # (CONVERTING) already disables each row's delete button.
             for job in self.jobs:
                 widget = self._item_widgets.get(job["id"])
                 if widget:
@@ -722,20 +728,20 @@ class ConvertSubTab(QWidget):
         self.worker.file_skipped.connect(self._on_file_skipped)
         self.worker.merge_finished.connect(self._on_merge_finished)
         self.worker.all_finished.connect(self._on_all_finished)
-        # [NOVO] conexão bloqueante: quando o worker encontra um PDF
-        # protegido, esta thread (a da GUI) mostra o diálogo de senha e só
-        # então devolve o controle ao worker - a janela nunca fica travada
-        # esperando, porque quem espera é o worker, não a GUI.
+        # Blocking connection: when the worker hits a password-protected
+        # PDF, this (GUI) thread shows the password dialog and only then
+        # hands control back to the worker - the window never freezes
+        # waiting, since it's the worker that waits, never the GUI.
         self.worker.password_requested.connect(
             self._on_password_requested, Qt.ConnectionType.BlockingQueuedConnection
         )
         self.worker.start()
 
     def _on_password_requested(self, path):
-        # [NOVO] roda na thread da GUI, chamado (via BlockingQueuedConnection)
-        # pelo worker quando ele encontra, DURANTE a mesclagem, um PDF
-        # protegido por senha. self.worker.password_response é lido pelo
-        # worker assim que este método retorna.
+        # Runs on the GUI thread, called (via BlockingQueuedConnection) by
+        # the worker when it hits, DURING the merge, a password-protected
+        # PDF. self.worker.password_response is read by the worker right
+        # after this method returns.
         password, ok = QInputDialog.getText(
             self, "Senha necessária",
             f"O arquivo \"{os.path.basename(path)}\" está protegido por senha.\n"
@@ -750,7 +756,6 @@ class ConvertSubTab(QWidget):
             widget.set_status(DocConversionItemWidget.STATUS_CONVERTING)
 
     def _on_file_skipped(self, job_id, _reason):
-        # [NOVO]
         widget = self._item_widgets.get(job_id)
         if widget:
             widget.set_status(DocConversionItemWidget.STATUS_UNSUPPORTED)
@@ -766,8 +771,8 @@ class ConvertSubTab(QWidget):
         self._bump_progress()
 
     def _on_merge_finished(self, success, message):
-        # [NOVO] em caso de sucesso, a lista inteira vira uma única linha
-        # representando o PDF final gerado.
+        # On success, the whole list collapses into a single row
+        # representing the final generated PDF.
         if success:
             self.file_list.clear()
             self._item_widgets = {}
@@ -789,9 +794,9 @@ class ConvertSubTab(QWidget):
         self._refresh_progress_display()
 
     def _refresh_progress_display(self):
-        # [NOVO] centraliza o cálculo do progresso geral, incluindo o caso
-        # de o usuário deletar um arquivo (a barra reflete a contagem
-        # restante tanto antes quanto durante uma conversão em andamento).
+        # Centralizes the overall-progress calculation, including the case
+        # where the user deletes a file (the bar reflects the remaining
+        # count both before and during an active run).
         total = len(self.jobs)
         self.overall_progress.setMaximum(max(total, 1))
         if self._converting and not self._merge_active:

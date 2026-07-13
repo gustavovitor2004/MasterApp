@@ -23,7 +23,7 @@ import time
 from PySide6.QtCore import QObject, Signal
 
 from settings import Settings
-from utils import ffmpeg_is_working, find_ffmpeg, safe_filename
+from utils import ffmpeg_is_working, find_ffmpeg, no_window_flags, safe_filename, unique_path
 
 VIDEO_FORMATS = ["mp4", "mkv", "avi", "mov", "webm", "flv"]
 AUDIO_FORMATS = ["mp3", "wav", "aac", "flac", "ogg", "m4a", "wma"]
@@ -290,7 +290,7 @@ class ConversionManager(QObject):
 
         os.makedirs(self.settings.output_dir, exist_ok=True)
         base_name = safe_filename(os.path.splitext(item.filename)[0])
-        output_path = _unique_path(self.settings.output_dir, base_name, item.target_ext)
+        output_path = unique_path(self.settings.output_dir, base_name, item.target_ext)
 
         cmd = [ffmpeg_path, "-y", "-i", item.source_path]
         if item.category == "video":
@@ -302,13 +302,12 @@ class ConversionManager(QObject):
         duration = _probe_duration(ffmpeg_path, item.source_path)
         cmd += ["-progress", "pipe:1", "-nostats", "-loglevel", "error", output_path]
 
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            creationflags=creationflags,
+            creationflags=no_window_flags(),
         )
         item.process = process
 
@@ -356,13 +355,12 @@ def _probe_duration(ffmpeg_path: str, file_path: str):
     if not ffprobe_path:
         return None
     try:
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         proc = subprocess.run(
             [ffprobe_path, "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", file_path],
             capture_output=True,
             timeout=20,
             text=True,
-            creationflags=creationflags,
+            creationflags=no_window_flags(),
         )
         value = proc.stdout.strip()
         return float(value) if value else None
@@ -378,12 +376,3 @@ def _sibling_ffprobe(ffmpeg_path: str) -> str:
         if os.path.isfile(candidate):
             return candidate
     return shutil.which("ffprobe") or ""
-
-
-def _unique_path(directory: str, base_name: str, ext: str) -> str:
-    candidate = os.path.join(directory, f"{base_name}.{ext}")
-    counter = 1
-    while os.path.exists(candidate):
-        candidate = os.path.join(directory, f"{base_name} ({counter}).{ext}")
-        counter += 1
-    return candidate

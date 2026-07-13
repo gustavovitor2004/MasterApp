@@ -62,16 +62,16 @@ class ConversionWorker(QThread):
 
     file_started = Signal(int)                # job_id (individual mode only)
     file_finished = Signal(int, bool, str)     # job_id, success, message (individual mode only)
-    file_skipped = Signal(int, str)            # [NOVO] job_id, reason - "Não suportado" (individual mode only)
-    merge_finished = Signal(bool, str)         # [NOVO] success, output_path or error message (merge mode only)
+    file_skipped = Signal(int, str)            # job_id, reason - "Não suportado" (individual mode only)
+    merge_finished = Signal(bool, str)         # success, output_path or error message (merge mode only)
     all_finished = Signal()
-    # [NOVO] emitido (com Qt.ConnectionType.BlockingQueuedConnection) quando
-    # o merge_to_pdf() rodando NESTA thread encontra um PDF protegido sem
-    # senha conhecida - o slot conectado a isso, na thread da GUI, deve
-    # gravar a senha em self.password_response antes de retornar. Como a
-    # conexão é bloqueante, esta thread fica parada esperando o usuário
-    # digitar a senha, mas a janela do app continua respondendo normalmente
-    # (quem trava seria só esta thread de trabalho, nunca a GUI).
+    # Emitted (with Qt.ConnectionType.BlockingQueuedConnection) when
+    # merge_to_pdf() running on THIS thread hits an encrypted PDF with no
+    # known password - the slot connected to this, on the GUI thread, must
+    # store the password in self.password_response before returning. Since
+    # the connection is blocking, this thread waits for the user to type
+    # the password, but the app window keeps responding normally (only
+    # this worker thread would ever be blocked, never the GUI).
     password_requested = Signal(str)
 
     def __init__(self, jobs, output_dir: str, target_ext: str, merge: bool = False,
@@ -93,9 +93,10 @@ class ConversionWorker(QThread):
         self.password_response = None
 
     def _ask_password(self, path: str):
-        # [NOVO] roda NESTA thread (a de conversão) - o emit() abaixo só
-        # retorna depois que o slot conectado na GUI já terminou de rodar
-        # e preencheu self.password_response, graças à conexão bloqueante.
+        # Runs on THIS thread (the conversion one) - the emit() below only
+        # returns after the slot connected on the GUI thread has already
+        # run and filled in self.password_response, thanks to the blocking
+        # connection.
         self.password_response = None
         self.password_requested.emit(path)
         return self.password_response
@@ -109,18 +110,16 @@ class ConversionWorker(QThread):
     def _run_individual(self):
         for job_id, path in self.jobs:
             if job_id in self.skip_ids:
-                # [NOVO] item removido da lista pelo usuário enquanto a
-                # conversão estava rodando - pula sem erro, sem sinal (o
-                # widget correspondente já foi removido da UI).
+                # Item removed from the list by the user while the
+                # conversion was running - skip silently, no signal (the
+                # corresponding widget has already been removed from the UI).
                 continue
 
             ext, _ = doc_converter.detect_format(path)
-            # [CORRIGIDO] antes o dropdown já bloqueava combinações
-            # inválidas para a lista inteira; agora ele mostra qualquer
-            # formato válido para PELO MENOS UM arquivo, então cada arquivo
-            # individual precisa ser checado aqui - os que não suportam o
-            # destino escolhido são marcados "Não suportado" e pulados, sem
-            # contar como erro.
+            # The dropdown shows any format valid for AT LEAST ONE file in
+            # the list, so each individual file still needs to be checked
+            # here - ones that don't support the chosen target are marked
+            # "Não suportado" and skipped, without counting as an error.
             if not doc_converter.can_convert(ext, self.target_ext):
                 self.file_skipped.emit(job_id, "Não suportado")
                 continue
@@ -135,9 +134,9 @@ class ConversionWorker(QThread):
         self.all_finished.emit()
 
     def _run_merge(self):
-        # [NOVO] modo de mesclagem: converte tudo em PDF e junta em um
-        # único arquivo, na ordem recebida (que reflete a ordem da lista,
-        # incluindo qualquer reordenação feita por arrastar-e-soltar).
+        # Merge mode: converts everything to PDF and joins it into a single
+        # file, in the order received (which reflects the list's order,
+        # including any drag-and-drop reordering).
         remaining_paths = [path for job_id, path in self.jobs if job_id not in self.skip_ids]
         try:
             out_path = doc_converter.merge_to_pdf(

@@ -3,18 +3,18 @@ documentos/ocr_engine.py
 
 All pytesseract / pdf2image logic for the "Digitalizar" (OCR) feature, plus
 helpers to export the extracted text as .txt, .docx or a (searchable,
-real-text) .pdf. Mirrors utils.find_ffmpeg / utils.ffmpeg_is_working for
-detecting the Tesseract binary.
+real-text) .pdf. Mirrors utils.find_ffmpeg for detecting the Tesseract
+binary, and reuses utils.binary_is_working / utils.unique_path rather than
+keeping its own copies of that logic.
 """
 
 import os
 import shutil
-import subprocess
 
 import pytesseract
 from PIL import Image
 
-from utils import safe_filename
+from utils import binary_is_working, safe_filename, unique_path
 
 LANGUAGE_CHOICES = {
     "Português": "por",
@@ -57,19 +57,7 @@ def find_tesseract(custom_path: str = "") -> str:
 
 def tesseract_is_working(tesseract_path: str) -> bool:
     """Actually try to run tesseract --version to confirm it's a real binary."""
-    if not tesseract_path:
-        return False
-    try:
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        proc = subprocess.run(
-            [tesseract_path, "--version"],
-            capture_output=True,
-            timeout=5,
-            creationflags=creationflags,
-        )
-        return proc.returncode == 0
-    except Exception:
-        return False
+    return binary_is_working(tesseract_path, "--version")
 
 
 def wrap_poppler_error(exc: Exception) -> Exception:
@@ -114,7 +102,7 @@ def ocr_pdf(file_path: str, lang: str, tesseract_path: str = "", progress_cb=Non
 
 def save_as_txt(text: str, output_dir: str, base_name: str) -> str:
     os.makedirs(output_dir, exist_ok=True)
-    out_path = _unique_path(output_dir, safe_filename(base_name), "txt")
+    out_path = unique_path(output_dir, safe_filename(base_name), "txt")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(text)
     return out_path
@@ -124,7 +112,7 @@ def save_as_docx(text: str, output_dir: str, base_name: str) -> str:
     from docx import Document
 
     os.makedirs(output_dir, exist_ok=True)
-    out_path = _unique_path(output_dir, safe_filename(base_name), "docx")
+    out_path = unique_path(output_dir, safe_filename(base_name), "docx")
     document = Document()
     for paragraph in text.split("\n"):
         document.add_paragraph(paragraph)
@@ -139,7 +127,7 @@ def save_as_pdf(text: str, output_dir: str, base_name: str) -> str:
     from reportlab.pdfgen import canvas
 
     os.makedirs(output_dir, exist_ok=True)
-    out_path = _unique_path(output_dir, safe_filename(base_name), "pdf")
+    out_path = unique_path(output_dir, safe_filename(base_name), "pdf")
     page_w, page_h = A4
     margin = 40
     line_height = 14
@@ -175,12 +163,3 @@ def _wrap_line(line: str, width: int):
     if current:
         lines.append(current)
     return lines or [""]
-
-
-def _unique_path(directory: str, base_name: str, ext: str) -> str:
-    candidate = os.path.join(directory, f"{base_name}.{ext}")
-    counter = 1
-    while os.path.exists(candidate):
-        candidate = os.path.join(directory, f"{base_name} ({counter}).{ext}")
-        counter += 1
-    return candidate

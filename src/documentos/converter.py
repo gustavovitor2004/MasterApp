@@ -21,15 +21,15 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from documentos.ocr_engine import wrap_poppler_error
-from utils import safe_filename
+from utils import no_window_flags, safe_filename, unique_path
 
 IMAGE_EXTS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
 
-# [CORRIGIDO] tabela de conversão explícita, igual à matriz pedida - cada
-# formato lista só os destinos que de fato tem uma implementação abaixo.
-# Não inclui o próprio formato de origem (ex: "pdf" não lista "pdf"): a
-# opção de manter o mesmo formato é tratada à parte, como passthrough/cópia,
-# em vez de aparecer como "conversão" normal.
+# Explicit conversion table, matching the requested matrix - each format
+# lists only the destinations that actually have an implementation below.
+# It doesn't include its own format (e.g. "pdf" doesn't list "pdf"): staying
+# in the same format is handled separately, as a passthrough/copy, rather
+# than appearing as a normal "conversion".
 CONVERSION_MATRIX = {
     "jpg": ["pdf", "png", "bmp", "webp", "tiff"],
     "jpeg": ["pdf", "png", "bmp", "webp", "tiff"],
@@ -79,10 +79,8 @@ def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb
     target_ext = target_ext.lower()
     os.makedirs(output_dir, exist_ok=True)
 
-    # [CORRIGIDO] passthrough para mesmo formato: antes não existia nenhum
-    # branch para "origem == destino" (ex: um PDF que já está na lista e o
-    # destino escolhido também é PDF), então convert_file() estourava
-    # ValueError. Agora isso é tratado como uma cópia simples.
+    # Same-format passthrough: e.g. a PDF already in the list, converting
+    # "to PDF" - just copy it instead of erroring on an unhandled pair.
     if ext == target_ext:
         return [_copy_passthrough(source_path, output_dir)]
 
@@ -99,23 +97,15 @@ def convert_file(source_path: str, target_ext: str, output_dir: str, progress_cb
     if ext == "docx" and target_ext == "pdf":
         return [_docx_to_pdf(source_path, output_dir)]
     if ext == "docx" and target_ext == "txt":
-        # [NOVO] DOCX -> TXT
         return [_docx_to_txt(source_path, output_dir)]
     if ext == "txt" and target_ext == "pdf":
-        # [NOVO] TXT -> PDF
         return [_txt_to_pdf(source_path, output_dir)]
     if ext == "txt" and target_ext == "docx":
-        # [NOVO] TXT -> DOCX
         return [_txt_to_docx(source_path, output_dir)]
 
     raise ValueError(f"Conversão de .{ext} para .{target_ext} não é suportada.")
 
 
-# [NOVO] merge de PDFs - substitui o antigo merge_images_to_pdf (que só
-# aceitava imagens). Agora aceita QUALQUER mistura de formatos suportados:
-# cada arquivo não-PDF é primeiro convertido para um PDF individual em uma
-# pasta temporária (apagada ao final), e todos os PDFs (originais + gerados)
-# são unidos, na ordem recebida, com pypdf.
 def merge_to_pdf(paths, output_dir: str, output_name: str = None, passwords: dict = None,
                   password_callback=None) -> str:
     """Merge several files (images, PDFs, DOCX, TXT - any mix) into a
@@ -128,11 +118,11 @@ def merge_to_pdf(paths, output_dir: str, output_name: str = None, passwords: dic
 
     `passwords` is an optional {path: password} map with passwords already
     known upfront. `password_callback`, if given, is called as
-    `password_callback(path)` - [NOVO] - for any encrypted PDF not already
-    covered by `passwords`, and must return the password to try (or None
-    to skip decryption). This indirection lets the caller (typically a
-    background worker) ask the GUI thread for a password on demand,
-    without this function needing to know anything about Qt."""
+    `password_callback(path)` for any encrypted PDF not already covered by
+    `passwords`, and must return the password to try (or None to skip
+    decryption). This indirection lets the caller (typically a background
+    worker) ask the GUI thread for a password on demand, without this
+    function needing to know anything about Qt."""
     from pypdf import PdfReader, PdfWriter
 
     if not paths:
@@ -146,9 +136,9 @@ def merge_to_pdf(paths, output_dir: str, output_name: str = None, passwords: dic
         for path in paths:
             ext = os.path.splitext(path)[1].lower().lstrip(".")
             if ext == "pdf":
-                # [NOVO] PDFs protegidos por senha são descriptografados
-                # antes de serem anexados - sem isso, pypdf recusa ler as
-                # páginas de um PDF criptografado.
+                # Password-protected PDFs are decrypted before being
+                # appended - without this, pypdf refuses to read the pages
+                # of an encrypted PDF.
                 reader = PdfReader(path)
                 if reader.is_encrypted:
                     password = passwords.get(path)
@@ -165,7 +155,7 @@ def merge_to_pdf(paths, output_dir: str, output_name: str = None, passwords: dic
                 writer.append(pdf_path)
 
         base_name = safe_filename(os.path.splitext(output_name)[0]) if output_name else "documento_mesclado"
-        out_path = _unique_path(output_dir, base_name, "pdf")
+        out_path = unique_path(output_dir, base_name, "pdf")
         with open(out_path, "wb") as f:
             writer.write(f)
     finally:
@@ -184,7 +174,7 @@ def _copy_passthrough(path: str, output_dir: str) -> str:
     under a non-colliding name."""
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
     ext = os.path.splitext(path)[1].lstrip(".")
-    out_path = _unique_path(output_dir, base, ext)
+    out_path = unique_path(output_dir, base, ext)
     shutil.copy2(path, out_path)
     return out_path
 
@@ -195,7 +185,7 @@ def _image_to_pdf(path: str, output_dir: str) -> str:
     draw_w, draw_h, x, y = _fit_to_page(image.size, (page_w, page_h))
 
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
-    out_path = _unique_path(output_dir, base, "pdf")
+    out_path = unique_path(output_dir, base, "pdf")
     c = canvas.Canvas(out_path, pagesize=A4)
     c.drawImage(ImageReader(image), x, y, width=draw_w, height=draw_h)
     c.save()
@@ -209,7 +199,7 @@ def _image_to_image(path: str, target_ext: str, output_dir: str) -> str:
     save_format = "JPEG" if target_ext in ("jpg", "jpeg") else target_ext.upper()
 
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
-    out_path = _unique_path(output_dir, base, target_ext)
+    out_path = unique_path(output_dir, base, target_ext)
     image.save(out_path, save_format)
     return out_path
 
@@ -227,7 +217,7 @@ def _pdf_to_images(path: str, target_ext: str, output_dir: str, progress_cb=None
     out_paths = []
     total = len(pages)
     for index, page in enumerate(pages, start=1):
-        out_path = _unique_path(output_dir, f"{base}_pg{index}", target_ext)
+        out_path = unique_path(output_dir, f"{base}_pg{index}", target_ext)
         if target_ext in ("jpg", "jpeg"):
             page = page.convert("RGB")
         page.save(out_path, save_format)
@@ -241,7 +231,7 @@ def _pdf_to_docx(path: str, output_dir: str) -> str:
     from pdf2docx import Converter
 
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
-    out_path = _unique_path(output_dir, base, "docx")
+    out_path = unique_path(output_dir, base, "docx")
     converter = Converter(path)
     try:
         converter.convert(out_path)
@@ -254,7 +244,7 @@ def _pdf_to_txt(path: str, output_dir: str, progress_cb=None) -> str:
     import pdfplumber
 
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
-    out_path = _unique_path(output_dir, base, "txt")
+    out_path = unique_path(output_dir, base, "txt")
     lines = []
     with pdfplumber.open(path) as pdf:
         total = len(pdf.pages)
@@ -269,7 +259,7 @@ def _pdf_to_txt(path: str, output_dir: str, progress_cb=None) -> str:
 
 def _docx_to_pdf(path: str, output_dir: str) -> str:
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
-    out_path = _unique_path(output_dir, base, "pdf")
+    out_path = unique_path(output_dir, base, "pdf")
 
     try:
         from docx2pdf import convert as docx2pdf_convert
@@ -281,12 +271,11 @@ def _docx_to_pdf(path: str, output_dir: str) -> str:
 
     libreoffice = shutil.which("soffice") or shutil.which("libreoffice")
     if libreoffice:
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         subprocess.run(
             [libreoffice, "--headless", "--convert-to", "pdf", "--outdir", output_dir, path],
             capture_output=True,
             timeout=120,
-            creationflags=creationflags,
+            creationflags=no_window_flags(),
         )
         if os.path.exists(out_path):
             return out_path
@@ -298,11 +287,10 @@ def _docx_to_pdf(path: str, output_dir: str) -> str:
 
 
 def _docx_to_txt(path: str, output_dir: str) -> str:
-    # [NOVO]
     from docx import Document
 
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
-    out_path = _unique_path(output_dir, base, "txt")
+    out_path = unique_path(output_dir, base, "txt")
     document = Document(path)
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -311,8 +299,8 @@ def _docx_to_txt(path: str, output_dir: str) -> str:
 
 
 def _txt_to_pdf(path: str, output_dir: str) -> str:
-    # [NOVO] reaproveita o exportador de texto->PDF já usado pelo OCR
-    # (produz um PDF com texto real/pesquisável, não uma imagem).
+    # Reuses the text->PDF exporter already used by OCR (produces a PDF
+    # with real, searchable text - not an image).
     from documentos.ocr_engine import save_as_pdf
 
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -322,7 +310,6 @@ def _txt_to_pdf(path: str, output_dir: str) -> str:
 
 
 def _txt_to_docx(path: str, output_dir: str) -> str:
-    # [NOVO]
     from documentos.ocr_engine import save_as_docx
 
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -345,12 +332,3 @@ def _fit_to_page(image_size, page_size):
     x = (page_w - draw_w) / 2
     y = (page_h - draw_h) / 2
     return draw_w, draw_h, x, y
-
-
-def _unique_path(directory: str, base_name: str, ext: str) -> str:
-    candidate = os.path.join(directory, f"{base_name}.{ext}")
-    counter = 1
-    while os.path.exists(candidate):
-        candidate = os.path.join(directory, f"{base_name} ({counter}).{ext}")
-        counter += 1
-    return candidate

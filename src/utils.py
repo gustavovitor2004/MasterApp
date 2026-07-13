@@ -6,7 +6,9 @@ Small, dependency-light helpers shared across the app:
 - Platform detection (YouTube, Instagram, Twitter/X, TikTok, Reddit, Facebook, generic)
 - ffmpeg detection
 - human-readable formatting for byte sizes / ETA / speed
-- filesystem-safe filename helper
+- filesystem-safe filename / unique-output-path helpers
+- small subprocess helpers shared by every module that shells out to a
+  helper binary (ffmpeg, ffprobe, tesseract, soffice/LibreOffice)
 """
 
 import os
@@ -89,6 +91,36 @@ def split_urls(text: str) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Subprocess helpers shared by every module that shells out to a helper
+# binary (ffmpeg/ffprobe in converter.py, tesseract in documentos/ocr_engine.py,
+# soffice in documentos/converter.py)
+# ---------------------------------------------------------------------------
+
+def no_window_flags():
+    """subprocess creationflags that suppress the console window that would
+    otherwise flash briefly on Windows when launching a helper binary from
+    a GUI app. No-op (0) on non-Windows platforms."""
+    return subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def binary_is_working(path: str, version_flag: str = "-version") -> bool:
+    """Actually try to run `<path> <version_flag>` to confirm it's a real,
+    executable binary rather than just a path that happens to exist."""
+    if not path:
+        return False
+    try:
+        proc = subprocess.run(
+            [path, version_flag],
+            capture_output=True,
+            timeout=5,
+            creationflags=no_window_flags(),
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # ffmpeg detection
 # ---------------------------------------------------------------------------
 
@@ -108,8 +140,8 @@ def find_ffmpeg(custom_path: str = "") -> str:
     if os.name == "nt":
         # winget installs ffmpeg as a "portable" package and exposes it via
         # a shim in this fixed folder. Checking it directly means the app
-        # can find ffmpeg right after `instalar.bat` runs, even before the
-        # user has restarted the PC and the PATH change has fully
+        # can find ffmpeg right after an installer script runs, even before
+        # the user has restarted the PC and the PATH change has fully
         # propagated to every already-running process.
         local_app_data = os.environ.get("LOCALAPPDATA", "")
         if local_app_data:
@@ -122,19 +154,7 @@ def find_ffmpeg(custom_path: str = "") -> str:
 
 def ffmpeg_is_working(ffmpeg_path: str) -> bool:
     """Actually try to run ffmpeg -version to confirm it's a real binary."""
-    if not ffmpeg_path:
-        return False
-    try:
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        proc = subprocess.run(
-            [ffmpeg_path, "-version"],
-            capture_output=True,
-            timeout=5,
-            creationflags=creationflags,
-        )
-        return proc.returncode == 0
-    except Exception:
-        return False
+    return binary_is_working(ffmpeg_path, "-version")
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +200,19 @@ def safe_filename(name: str) -> str:
     """Strip characters that are illegal in Windows filenames."""
     name = re.sub(r'[\\/:*?"<>|]', "_", name)
     return name.strip()[:150] or "video"
+
+
+def unique_path(directory: str, base_name: str, ext: str) -> str:
+    """Build a path for `<directory>/<base_name>.<ext>`, appending " (1)",
+    " (2)", etc. until it doesn't collide with an existing file. Shared by
+    every module that writes converted/exported output (the top-level
+    converter.py, documentos/converter.py, documentos/ocr_engine.py)."""
+    candidate = os.path.join(directory, f"{base_name}.{ext}")
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(directory, f"{base_name} ({counter}).{ext}")
+        counter += 1
+    return candidate
 
 
 def height_to_label(height) -> str:

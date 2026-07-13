@@ -1,11 +1,11 @@
 """
 main.py
 
-Entry point for the Video Downloader desktop app.
+Entry point for the MasterApp desktop app.
 
 Usage:
     pip install -r requirements.txt
-    python main.py
+    python src/main.py
 
 This file is intentionally thin: it wires together settings, the download
 manager and the GUI, and makes sure any startup failure is shown to the
@@ -26,7 +26,7 @@ from ui import MainWindow
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("Video Downloader")
+    app.setApplicationName("MasterApp")
 
     try:
         settings = load_settings()
@@ -40,7 +40,7 @@ def main():
         error_text = traceback.format_exc()
         QMessageBox.critical(
             None,
-            "Erro ao iniciar o Video Downloader",
+            "Erro ao iniciar o MasterApp",
             f"Ocorreu um erro inesperado ao iniciar o aplicativo:\n\n{error_text}",
         )
         sys.exit(1)

@@ -1,18 +1,21 @@
 """
 settings.py
 
-Loads/saves application configuration to a local config.json file that lives
-next to this script (so the app works no matter what directory it's launched
-from), while all actual *data* (downloads) defaults to a user-writable path
+Loads/saves application configuration to a local config.json file that
+lives at the project root (one level above this file's own `src/` folder)
+so it survives future code updates without being nested inside the source
+tree, while all actual *data* (downloads) defaults to a user-writable path
 under the user's home directory - never Program Files.
 """
 
 import json
 import os
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
+# This file lives in <project_root>/src/settings.py, so the project root -
+# where config.json belongs - is one directory up from here.
+APP_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = APP_DIR / "config.json"
 
 DEFAULT_OUTPUT_DIR = str(Path.home() / "Videos" / "Downloads")

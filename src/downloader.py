@@ -34,7 +34,10 @@ import yt_dlp
 from PySide6.QtCore import QObject, Signal
 
 from settings import Settings
-from utils import detect_platform, ffmpeg_is_working, find_ffmpeg, height_to_label, safe_filename
+from utils import (
+    detect_platform, ffmpeg_is_working, find_ffmpeg, format_bytes_per_sec,
+    format_eta, height_to_label,
+)
 
 try:
     import requests
@@ -380,7 +383,6 @@ class DownloadManager(QObject):
                     item.progress = min(99.0, downloaded / total * 100.0)
                 speed = d.get("speed")
                 eta = d.get("eta")
-                from utils import format_bytes_per_sec, format_eta
                 item.speed_text = format_bytes_per_sec(speed)
                 item.eta_text = format_eta(eta)
                 item.status = DownloadItem.STATUS_DOWNLOADING

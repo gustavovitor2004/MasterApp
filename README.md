@@ -74,6 +74,35 @@ localização do próprio projeto e à pasta pessoal do usuário, nunca
 `Program Files`. O `config.json` fica sempre na raiz do projeto (fora de
 `src/`), então sobrevive a futuras atualizações do código.
 
+## Desinstalar
+
+Para remover completamente o que o `MasterApp.bat` instalou:
+
+1. Dê dois cliques em **`Desinstalar_MasterApp.bat`**, na raiz do projeto.
+2. Confirme a desinstalação digitando **S**.
+3. Aguarde a conclusão.
+
+**O que é removido:**
+- Todos os pacotes Python instalados pelo `MasterApp.bat` (`requirements.txt`)
+- `ffmpeg` portátil (pasta `tools\ffmpeg`)
+- Poppler portátil (pasta `tools\poppler`)
+- Registro de instalação (`.masterapp_installed`)
+
+**O que NÃO é removido:**
+- O Python em si
+- Seus arquivos pessoais (vídeos baixados, documentos convertidos, etc.)
+- A pasta do MasterApp — a menos que você responda **S** na pergunta final
+  opcional, que apaga a pasta inteira (código-fonte incluído). Essa etapa é
+  irreversível e só acontece se você confirmar explicitamente.
+
+Assim como o instalador, o desinstalador **não pede permissão de
+administrador** — como nada é registrado no `PATH` do sistema, não há nada
+em nível de sistema para desfazer.
+
+Depois de desinstalar, rodar `MasterApp.bat` novamente reinicia o processo
+de instalação do zero, como se fosse a primeira vez (o marcador foi
+apagado).
+
 ## Como usar
 
 1. Cole um link de vídeo no campo de texto (pode colar vários links, um por
@@ -242,6 +271,7 @@ nenhum dos dois, o app mostra um erro claro em vez de travar.
 │       ├── workers.py        # QThread workers de digitalização e conversão
 │       └── tab_documentos.py # Widget da aba (sub-abas Digitalizar/Converter)
 ├── MasterApp.bat             # Único arquivo que o usuário abre - instala na 1ª vez, inicia sempre
+├── Desinstalar_MasterApp.bat # Remove pacotes Python, tools/ffmpeg, tools/poppler e o marcador
 ├── tools_installer.ps1       # Baixa ffmpeg/Poppler portáteis, chamado pelo MasterApp.bat
 ├── tools/                    # Criado na 1ª execução: ffmpeg/Poppler portáteis (git-ignored)
 ├── .masterapp_installed      # Marcador criado só após instalação 100% bem-sucedida (git-ignored)

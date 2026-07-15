@@ -3,67 +3,76 @@
 Aplicativo pessoal de desktop para baixar vídeos do YouTube, Instagram,
 Twitter/X, TikTok, Reddit, Facebook e qualquer outra plataforma suportada
 pelo [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), com seleção de qualidade
-até 4K — além de conversão de mídia local e uma aba de OCR/conversão de
-documentos.
+até 4K — além de conversão de mídia local e uma aba de digitalização e
+conversão de documentos.
 
 ## Requisitos
 
 - Windows 10/11
-- Python 3.10 ou superior
-- [ffmpeg](https://ffmpeg.org/download.html) instalado no sistema (necessário
-  para mesclar vídeo+áudio em qualidades acima de 360p, extrair áudio em
-  MP3 e para a aba de conversão de mídia local)
-- Para a aba **📄 Documentos** (OCR e conversão de documentos): Tesseract
-  OCR e, opcionalmente, Poppler e Microsoft Word/LibreOffice — veja a seção
-  [Aba "Documentos"](#aba-documentos-ocr-e-conversão-de-documentos) mais
-  abaixo. O restante do app funciona normalmente mesmo sem eles.
+- Python 3.10 ou superior, com **"Add python.exe to PATH"** marcado na
+  instalação — é o único requisito que você precisa resolver manualmente,
+  tudo o mais é instalado automaticamente (veja abaixo)
 
-## Instalação rápida (recomendado para enviar a outra pessoa)
+## Instalação e uso
 
-Se você recebeu esta pasta de alguém (ou vai repassá-la), não precisa mexer
-em terminal:
+1. Dê **duplo clique em `MasterApp.bat`**, na raiz do projeto.
+   - **Primeira vez**: o script detecta que ainda falta instalar tudo,
+     mostra o progresso na tela (bibliotecas Python, depois `ffmpeg` e
+     `Poppler` se não estiverem já no seu sistema) e abre o programa
+     automaticamente ao final. Leva de 2 a 5 minutos, dependendo da sua
+     internet. **Não pede permissão de administrador** — tudo é instalado
+     na sua própria conta de usuário ou dentro da pasta do projeto.
+   - **Próximas vezes**: o script detecta que já está tudo pronto (por um
+     arquivo marcador `.masterapp_installed`) e abre o programa
+     imediatamente, sem reinstalar nada.
+2. Pronto — não existe nenhum outro arquivo para abrir ou configurar.
 
-1. Dê **duplo clique em `scripts\instalar.bat`**. Ele verifica se Python
-   3.10+ está instalado (abrindo a página de download se não estiver),
-   instala/atualiza o `pip` e todas as bibliotecas do `requirements.txt`, e
-   avisa (com link de download) se `ffmpeg` ou `tesseract` não estiverem no
-   `PATH` do sistema.
-2. Depois de terminar, dê **duplo clique em `scripts\iniciar.bat`** sempre
-   que quiser abrir o programa.
+Se a instalação falhar em algum passo (ex: sem internet), o marcador **não**
+é criado, então da próxima vez que você abrir `MasterApp.bat` ele tenta
+instalar tudo de novo do zero, em vez de abrir o programa quebrado.
 
-Envie a pasta inteira (`src/`, `scripts/`, `requirements.txt`, `README.md`)
-compactada em `.zip` para a outra pessoa — não é necessário ter Git nem
-nenhuma ferramenta extra instalada previamente.
+Envie a pasta inteira (`src/`, `MasterApp.bat`, `tools_installer.ps1`,
+`requirements.txt`, `README.md`) compactada em `.zip` para outra pessoa —
+ela só precisa ter o Python instalado; nenhuma outra ferramenta (nem Git)
+é necessária de antemão.
 
-### Instalando o ffmpeg/tesseract manualmente
+### O que é instalado automaticamente
 
-- **ffmpeg**: baixe o build "essentials" em
-  https://www.gyan.dev/ffmpeg/builds/ (ou `winget install ffmpeg`), extraia
-  o `.zip` e adicione a pasta `bin` ao `PATH` do Windows. Confirme com
-  `ffmpeg -version` em um terminal novo. Se preferir não mexer no `PATH`,
-  informe o caminho completo do executável em **Configurações → Caminho
-  customizado do ffmpeg** dentro do próprio app.
-- **tesseract**: veja a seção [Aba "Documentos"](#aba-documentos-ocr-e-conversão-de-documentos)
-  mais abaixo.
+- Todas as bibliotecas Python do `requirements.txt` (via `pip`, na conta do
+  usuário)
+- **ffmpeg** portátil, baixado para `tools\ffmpeg\` (usado para baixar e
+  mesclar vídeo/áudio) — só se não for encontrado já instalado no `PATH`
+- **Poppler** portátil, baixado para `tools\poppler\` (usado para
+  converter PDFs na aba Documentos) — só se não for encontrado já
+  instalado no `PATH`
 
-## Instalação manual (via terminal)
+Nenhuma dessas ferramentas é registrada no `PATH` do Windows nem instalada
+para o sistema inteiro — o MasterApp já sabe procurar dentro de `tools\`
+automaticamente, então isso funciona sem pedir administrador.
+
+### Instalando manualmente (alternativa)
+
+Se preferir não usar `MasterApp.bat`, ou já tem `ffmpeg`/`Poppler`
+instalados de outra forma:
 
 ```bash
 pip install -r requirements.txt
-```
-
-## Executando
-
-```bash
 python src/main.py
 ```
 
-Ou, no Windows, dê duplo clique em `scripts\iniciar.bat`. O app funciona a
-partir de qualquer diretório de trabalho — ele resolve seus próprios
-caminhos (config, pasta de downloads) relativos à localização do próprio
-projeto e à pasta pessoal do usuário, nunca `Program Files`. O
-`config.json` fica sempre na raiz do projeto (fora de `src/`), então
-sobrevive a futuras atualizações do código.
+- **ffmpeg**: baixe em https://ffmpeg.org/download.html (ou
+  `winget install ffmpeg`), extraia e adicione a pasta `bin` ao `PATH` do
+  Windows — ou informe o caminho completo em **Configurações → Caminho
+  customizado do ffmpeg** dentro do próprio app.
+- **Poppler**: baixe em
+  https://github.com/oschwartz10612/poppler-windows/releases, extraia e
+  adicione a pasta `Library\bin` ao `PATH` do Windows.
+
+O app funciona a partir de qualquer diretório de trabalho — ele resolve
+seus próprios caminhos (config, pasta de downloads) relativos à
+localização do próprio projeto e à pasta pessoal do usuário, nunca
+`Program Files`. O `config.json` fica sempre na raiz do projeto (fora de
+`src/`), então sobrevive a futuras atualizações do código.
 
 ## Como usar
 
@@ -141,24 +150,30 @@ Acessível pelo botão **⚙ Config** no cabeçalho:
 
 Tudo é salvo automaticamente em `config.json`, na raiz do projeto.
 
-## Aba "📄 Documentos" (OCR e conversão de documentos)
+## Aba "📄 Documentos" (digitalização e conversão de documentos)
 
 Uma terceira aba, independente das de Downloads, com duas funções que
 funcionam 100% offline (nenhuma delas depende de internet):
 
-### 🔍 Digitalizar (OCR)
+### 🔍 Digitalizar
 
-1. Clique em **📂 Selecionar Arquivo** e escolha uma imagem (`.jpg`, `.png`,
-   `.bmp`, `.tiff`, `.webp`) ou um PDF escaneado.
-2. Uma prévia do arquivo aparece à esquerda. Escolha o **idioma** do texto
-   (Português, Inglês, Espanhol ou Automático).
-3. Clique em **🔍 Digitalizar** — o OCR roda em segundo plano (nunca trava a
-   interface). PDFs de várias páginas mostram uma barra de progresso
-   "Página X de Y"; imagens únicas mostram um indicador de carregamento.
-4. O texto extraído aparece **editável** à direita — corrija o que precisar
-   antes de salvar.
-5. Use **📋 Copiar Texto**, ou salve como **.TXT**, **.DOCX** ou **.PDF**
-   (o PDF gerado contém texto real e pesquisável, não uma imagem).
+Transforma a foto de um documento tirada com o celular em uma digitalização
+limpa e corrigida — como um scanner de mesa, ou apps como CamScanner/Adobe
+Scan. Não faz reconhecimento de texto, é só o processamento visual.
+
+1. Clique em **📂 Selecionar Imagem** e escolha a foto (`.jpg`, `.png`,
+   `.bmp`, `.webp`, `.tiff`).
+2. O app detecta automaticamente as 4 bordas do documento na foto e mostra
+   uma prévia com os cantos marcados — **arraste os pontos** para ajustar
+   manualmente se a detecção não ficou perfeita.
+3. Escolha o **modo**: Colorido, Escala de cinza, ou Preto e branco
+   (visual clássico de scanner).
+4. Clique em **✨ Digitalizar** — o processamento roda em segundo plano
+   (nunca trava a interface): corrige a perspectiva, deixando o documento
+   reto e retangular, e realça contraste/nitidez.
+5. Use **👁 Ver original / Ver digitalizado** para comparar o antes e
+   depois, e salve como **JPEG**, **PNG** ou **PDF** (cada botão pede o
+   nome do arquivo).
 
 Saída padrão: `~/Documents/Digitalizados` (configurável só editando
 `config.json` por enquanto — não há campo na tela de Configurações para
@@ -195,32 +210,15 @@ Saída padrão: `~/Documents/Convertidos`.
 
 ### Dependências extras desta aba
 
-O `scripts\instalar.bat` verifica `tesseract` no PATH (veja acima). As
-instruções abaixo são para quem prefere instalar manualmente, ou precisa de
-Poppler/LibreOffice (não checados pelo instalador). Além do `ffmpeg` já
-usado pelo resto do app, a aba Documentos precisa de:
+`MasterApp.bat` já baixa o **Poppler** automaticamente (veja
+[Instalação e uso](#instalação-e-uso) acima), necessário para as operações
+com PDF: converter PDF → imagem e mesclar PDF. Sem ele, essas operações
+específicas mostram uma mensagem de erro clara em vez de travar o app.
 
-- **Tesseract OCR** (motor de reconhecimento de texto):
-  - Windows: baixe o instalador em
-    https://github.com/UB-Mannheim/tesseract/wiki
-  - Durante a instalação, marque os pacotes de idioma **Português** e
-    **Inglês**.
-  - Adicione a pasta de instalação ao `PATH` do Windows (normalmente
-    `C:\Program Files\Tesseract-OCR`) — ou apenas deixe como está, o app
-    detecta esse caminho padrão automaticamente mesmo sem PATH.
-  - Se não for encontrado, o app mostra um aviso claro assim que a aba
-    Documentos é aberta, explicando como instalar.
-- **Poppler** (necessário só para operações com PDF: digitalizar PDF,
-  converter PDF → imagem, mesclar PDF):
-  - Windows: baixe em
-    https://github.com/oschwartz10612/poppler-windows/releases, extraia o
-    `.zip` e adicione a pasta `Library\bin` ao `PATH` do Windows.
-  - Sem o poppler, essas operações específicas mostram uma mensagem de erro
-    clara em vez de travar o app.
-- **DOCX → PDF** precisa do **Microsoft Word** instalado (Windows, usado
-  via automação COM) **ou** do **LibreOffice** instalado como alternativa
-  (`soffice --headless`). Sem nenhum dos dois, o app mostra um erro claro
-  em vez de travar.
+**DOCX → PDF** precisa do **Microsoft Word** instalado (Windows, usado via
+automação COM) **ou** do **LibreOffice** instalado como alternativa
+(`soffice --headless`) — nenhum dos dois é instalado automaticamente. Sem
+nenhum dos dois, o app mostra um erro claro em vez de travar.
 
 ## Estrutura de arquivos
 
@@ -228,23 +226,26 @@ usado pelo resto do app, a aba Documentos precisa de:
 /MasterApp
 ├── src/                      # todo o código-fonte Python
 │   ├── main.py               # Ponto de entrada — inicia a interface gráfica
+│   ├── startup_check.py      # Confere pacotes/ferramentas ausentes ao iniciar
 │   ├── ui.py                 # Componentes de interface (PySide6)
 │   ├── theme.py              # Sistema de tema centralizado (dark/light, apply_theme)
 │   ├── downloader.py         # Wrapper do yt-dlp, fila de downloads e threading
 │   ├── converter.py          # Conversor de mídia local via ffmpeg, fila e threading
 │   ├── settings.py           # Carregar/salvar config.json (na raiz do projeto)
-│   ├── utils.py              # Validação de URL, detecção de plataforma, helpers
-│   └── documentos/           # Aba "Documentos": OCR e conversão de documentos
+│   ├── utils.py               # Validação de URL, detecção de plataforma, detecção de
+│   │                          # ffmpeg/Poppler (PATH ou tools/), helpers
+│   └── documentos/           # Aba "Documentos": digitalização e conversão
 │       ├── __init__.py
-│       ├── ocr_engine.py     # pytesseract / pdf2image + exportar .txt/.docx/.pdf
+│       ├── scanner_engine.py # Pipeline de digitalização via OpenCV (perspectiva + realce)
 │       ├── converter.py      # Conversão de imagem/PDF/DOCX/TXT (Pillow, reportlab,
 │       │                     # pdf2image, pdf2docx, pdfplumber, docx2pdf, pypdf)
-│       ├── workers.py        # QThread workers de OCR e conversão
+│       ├── workers.py        # QThread workers de digitalização e conversão
 │       └── tab_documentos.py # Widget da aba (sub-abas Digitalizar/Converter)
-├── scripts/                  # scripts executáveis, separados do código-fonte
-│   ├── instalar.bat          # Verifica Python/pip, instala dependências, checa ffmpeg/tesseract
-│   └── iniciar.bat           # Abre o programa (duplo clique)
-├── config.json                # Criado automaticamente na primeira execução
+├── MasterApp.bat             # Único arquivo que o usuário abre - instala na 1ª vez, inicia sempre
+├── tools_installer.ps1       # Baixa ffmpeg/Poppler portáteis, chamado pelo MasterApp.bat
+├── tools/                    # Criado na 1ª execução: ffmpeg/Poppler portáteis (git-ignored)
+├── .masterapp_installed      # Marcador criado só após instalação 100% bem-sucedida (git-ignored)
+├── config.json                # Criado automaticamente na primeira execução (git-ignored)
 ├── requirements.txt
 └── README.md
 ```
@@ -270,12 +271,19 @@ usado pelo resto do app, a aba Documentos precisa de:
 - **Mesclagem**: quando a qualidade selecionada exige stream de vídeo e
   áudio separados (comum a partir de 720p/1080p no YouTube), o `yt-dlp`
   usa o ffmpeg para mesclá-los automaticamente em `.mp4`.
+- **Instalação sem administrador**: `MasterApp.bat` nunca pede elevação.
+  `pip` instala na conta do usuário automaticamente quando o Python é
+  compartilhado entre contas; `ffmpeg`/Poppler são baixados como binários
+  portáteis para `tools/` em vez de registrados no `PATH` do sistema —
+  `utils.find_ffmpeg()`/`utils.find_poppler_bin_dir()` já sabem procurar
+  ali como uma opção a mais, então nada precisa ser instalado globalmente.
 
 ## Solução de problemas
 
 | Problema | Causa provável | Solução |
 |---|---|---|
-| "ffmpeg não encontrado" | ffmpeg não está instalado ou não está no PATH | Instale o ffmpeg ou informe o caminho manualmente nas Configurações |
+| `MasterApp.bat` trava em "Instalando pacotes Python" | Sem conexão com a internet | Verifique a internet e rode `MasterApp.bat` de novo — o marcador só é criado após sucesso total, então ele tenta tudo de novo do zero |
+| "ffmpeg não encontrado" | ffmpeg não está instalado ou não está no PATH nem em `tools\ffmpeg` | Apague `.masterapp_installed` e rode `MasterApp.bat` de novo, ou instale manualmente (veja acima) |
 | Item fica "Indisponível" | Vídeo privado, removido ou exige login | Nada a fazer no app — o conteúdo não está acessível publicamente |
 | Download trava em 0% | Link inválido ou plataforma não suportada pelo yt-dlp | Verifique a URL; consulte a lista de extratores do yt-dlp |
 | Qualidade baixada é menor que a selecionada | A plataforma não oferece aquele stream para este vídeo | Comportamento esperado — o app mostra a qualidade real ao lado do título |

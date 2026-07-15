@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 config.json
 *.info.json
+.masterapp_installed
+tools/

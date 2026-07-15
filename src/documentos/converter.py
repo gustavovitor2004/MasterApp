@@ -20,7 +20,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from utils import no_window_flags, safe_filename, unique_path
+from utils import find_poppler_bin_dir, no_window_flags, safe_filename, unique_path
 
 IMAGE_EXTS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
 
@@ -224,7 +224,12 @@ def _pdf_to_images(path: str, target_ext: str, output_dir: str, progress_cb=None
     from pdf2image import convert_from_path
 
     try:
-        pages = convert_from_path(path, dpi=200)
+        # Explicit poppler_path: MasterApp.bat downloads Poppler into
+        # tools/poppler instead of registering it on PATH, so pdf2image
+        # needs to be told exactly where to find it. Passing None (when
+        # nothing is found - e.g. poppler already IS on PATH) keeps the
+        # previous behavior intact.
+        pages = convert_from_path(path, dpi=200, poppler_path=find_poppler_bin_dir() or None)
     except Exception as exc:  # noqa: BLE001 - normalize to a clear PT-BR message
         raise wrap_poppler_error(exc)
 

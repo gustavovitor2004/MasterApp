@@ -22,11 +22,15 @@ from settings import load_settings
 from downloader import DownloadManager
 from converter import ConversionManager
 from ui import MainWindow
+from startup_check import verify_environment
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("MasterApp")
+
+    for warning in verify_environment():
+        print(f"[AVISO] {warning}")
 
     try:
         settings = load_settings()

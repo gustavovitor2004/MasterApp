@@ -17,6 +17,13 @@ import shutil
 import subprocess
 from urllib.parse import urlparse
 
+
+def project_root() -> str:
+    """The directory containing this src/ folder - i.e. the project root,
+    where MasterApp.bat creates config.json, tools/ffmpeg, tools/poppler,
+    etc. on first run."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # ---------------------------------------------------------------------------
 # Platform detection
 # ---------------------------------------------------------------------------
@@ -148,12 +155,49 @@ def find_ffmpeg(custom_path: str = "") -> str:
             if os.path.isfile(winget_shim):
                 return winget_shim
 
+        # MasterApp.bat downloads a portable ffmpeg into tools/ffmpeg on
+        # first run when it isn't already on PATH - never registered
+        # system-wide, so this fixed, predictable location is the only way
+        # the app can find it.
+        bundled = os.path.join(project_root(), "tools", "ffmpeg", "ffmpeg.exe")
+        if os.path.isfile(bundled):
+            return bundled
+
     return ""
 
 
 def ffmpeg_is_working(ffmpeg_path: str) -> bool:
     """Actually try to run ffmpeg -version to confirm it's a real binary."""
     return binary_is_working(ffmpeg_path, "-version")
+
+
+# ---------------------------------------------------------------------------
+# Poppler detection (needed by pdf2image, used for PDF -> image conversion)
+# ---------------------------------------------------------------------------
+
+def find_poppler_bin_dir(custom_path: str = "") -> str:
+    """Return a directory containing pdftoppm/pdftocairo, or '' if none
+    found. pdf2image's `poppler_path` argument wants a *directory*, not the
+    binary path itself, unlike find_ffmpeg()."""
+    pdftoppm_name = "pdftoppm.exe" if os.name == "nt" else "pdftoppm"
+
+    if custom_path and os.path.isdir(custom_path):
+        if os.path.isfile(os.path.join(custom_path, pdftoppm_name)):
+            return custom_path
+
+    found = shutil.which("pdftoppm")
+    if found:
+        return os.path.dirname(found)
+
+    if os.name == "nt":
+        # Same idea as find_ffmpeg()'s tools/ffmpeg fallback: MasterApp.bat
+        # downloads a portable Poppler into tools/poppler when it isn't
+        # already on PATH.
+        bundled = os.path.join(project_root(), "tools", "poppler", pdftoppm_name)
+        if os.path.isfile(bundled):
+            return os.path.dirname(bundled)
+
+    return ""
 
 
 # ---------------------------------------------------------------------------
